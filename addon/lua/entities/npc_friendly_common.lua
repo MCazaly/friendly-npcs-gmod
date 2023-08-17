@@ -57,7 +57,9 @@ function ENT:should_target(ent)
     end
 
     local class = ent:GetClass()
-    return ent:IsNPC() and ent:Health() > 0 and not class:find("bullseye") and not class:find(self:get_name())
+    print("Same class?")
+    print(class == self:GetClass())
+    return ent:IsNPC() and ent:Health() > 0 and not class:find("bullseye") and not class == self:GetClass()
 end
 
 function ENT:attack()

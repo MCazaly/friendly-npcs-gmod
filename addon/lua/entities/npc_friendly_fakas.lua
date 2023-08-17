@@ -33,7 +33,6 @@ if SERVER then
                     TRAILS[id] = {}
                 end
                 table.insert(TRAILS[id], ply:GetPos())
-                print(#TRAILS[id])
             end
         end
     end)
@@ -53,6 +52,8 @@ function ENT:Initialize()
     self.convars = Fakas.Lib.NPCs.create_convars(self)
 
     BaseClass.Initialize(self)
+
+    self:SetCollisionGroup(COLLISION_GROUP_PASSABLE_DOOR)  -- We don't want players to get stuck on us
 
     self.knockback_up = 8
     self.default_knockback_up = 8
@@ -76,6 +77,10 @@ function ENT:Initialize()
     self.teleport_wait = 2
 end
 
+function ENT:SetupDataTables()
+    self:NetworkVar("Int", 0, "TargetID")
+end
+
 function ENT:attack_target(target)
     self:knockback(target)
     return self:Explode(self.convars.attack_damage:GetInt())
@@ -86,6 +91,12 @@ function ENT:cloak_server()
     net.WriteInt(self:EntIndex(), 32)
     net.WriteInt(self.cloak_status, 32)
     net.Broadcast()
+end
+
+function ENT:BehaveUpdate()
+    print(self.current_phase)
+
+    BaseClass.BehaveUpdate(self)
 end
 
 function ENT:cloak_client()
@@ -191,28 +202,105 @@ function ENT:can_fit(pos)
     return not hull.Hit
 end
 
-function ENT:update_target()
-    local target = nil
-    local pos = nil
-    for id, trail in pairs(TRAILS) do
-        local ply = Player(id)
-        if not self:should_target(ply) or #trail < 24 then
-            continue
+function ENT:teleport_pos(target)
+    if not target:IsValid() then
+        return nil
+    end
+    if target:IsPlayer() then
+        -- In the name of "fairness" we don't teleport inside players. Check their position history for a good spot.
+        local trail = TRAILS[target:UserID()]
+
+        print(#trail)
+        if #trail < 24 then
+            print("Not enough history!")
+            -- Player hasn't built up enough position history yet
+            return nil
         end
 
-        for ii = #trail - 8, #trail - 16, -1 do
+        for ii = #trail - 8, #trail - 16, -1 do  -- A sample of the last few positions, in reverse order
             if self:can_fit(trail[ii]) then
-                pos = trail[ii]
-                target = ply
-                break
+                -- We can fit here! Good for teleporting to.
+                return trail[ii]
+            end
+            print("Can't fit!")
+        end
+        return nil -- Nowhere good to teleport to :(
+    end
+
+    return target:GetPos()  -- We don't give a shit about being fair to NPCs or props.
+end
+
+function ENT:update_target()
+    local targets = {}
+    for _, ply in pairs(player.GetAll()) do
+        local teleport_pos = self:teleport_pos(ply)
+        print("Should I target " .. ply:Nick() .. "?")
+        print(self:should_target(ply))
+        print("What is the teleport_pos?")
+        print(teleport_pos)
+
+        if self:should_target(ply) and teleport_pos ~= nil then
+            print("Insert to targets table!")
+            table.insert(targets, {ply, teleport_pos})
+        end
+    end
+
+    if #targets == 0 then
+        print("Couldn't find a good player to teleport to!")
+        -- We didn't find a player, target an NPC or something destructible this round instead
+        local npcs = {}
+        local breakables = {}
+        local ents = ents.GetAll()
+        for _, ent in pairs(ents) do
+            if ent:IsNPC() and self:should_target(ent) then
+                table.insert(npcs, {ent, self:teleport_pos(ent)})
+                continue
+            end
+
+            if not ent:IsPlayer() and not ent:IsNPC() and ent:Alive() and ent:Health() > 0 then
+                table.insert(breakables, {ent, self:teleport_pos(ent)})
             end
         end
 
-        if target ~= nil then
-            self.current_target = target
-            return pos
+        if #npcs > 0 then
+            targets = npcs
+        end
+        if #breakables > 0 then
+            targets = breakables
         end
     end
+
+    if #targets > 0 then
+        local target = Fakas.Lib.random_member(targets)
+        print("Set target:")
+        print(target[1])
+        self:set_target(target[1])
+        print("Return pos:")
+        print(target[2])
+        return target[2]
+    end
+
+    print("Couldn't find anything to target!")
+    self:set_target(nil)
+    return nil  -- Oh dear. Nothing to target...
+end
+
+function ENT:set_target(target)
+    if not IsValid(target) or not target:Alive() then
+        -- Not a valid target, reset to nil
+        self.current_target = nil
+        self:SetTargetID(0)  -- Inactive music
+        return
+    end
+
+    -- Something we can actually target!
+    self.current_target = target
+    print(target)
+    if target:IsPlayer() then
+        self:SetTargetID(target:UserID(self.current_target))  -- Chase music for target, active music for other players
+        return
+    end
+    self:SetTargetID(-1)  -- Active music for all players
 end
 
 function ENT:phase_1()
@@ -237,8 +325,13 @@ function ENT:phase_2()
     if self:Health() == self:GetMaxHealth() and now - self.downtime_start >= self.downtime_min then
         -- We're all healed up and we've waited the minimum duration, time to do some crimes
         local pos = self:update_target()
+        print("Final position:")
+        print(pos)
         if pos ~= nil then
+            print(self.current_target)
+            print("Teleport!")
             self:teleport(pos)
+            print("End downtime!")
             self:end_downtime()
         end
     end
@@ -246,13 +339,14 @@ end
 
 function ENT:phase_3()
     -- We've locked on to a target and teleported nearby, let's announce our presence!
-    if CurTime() - self.last_teleport >= self.teleport_wait then
+    if CurTime() - self.last_teleport < self.teleport_wait then
         -- Wait a little after our teleport before decloaking to avoid showing interpolated movement
         return
     end
 
     if self.cloak_status ~= DECLOAKED then
         -- We'll give our victim a sporting chance - wait for the full decloak animation
+        print("Waiting for decloak!")
         return self:decloak()
     end
 
@@ -264,6 +358,7 @@ function ENT:phase_4()
     local now = CurTime()
     if not IsValid(self.current_target) or not self.current_target:Alive() or now - self.chase_start >= self.chase_time then
         -- We've lost our target or we've chased for too long, this one gets away...
+        print("Ending the chase!")
         self:end_chase()
         return
     end
@@ -309,6 +404,7 @@ end
 
 function ENT:end_chase()
     self.chase_start = nil
+    self:set_target(nil)
     self.current_phase = 1
 end
 
@@ -329,6 +425,70 @@ hook.Add("EntityRemoved", "FriendlyNPCsFakasDeath", function(ent)
 end)
 
 if CLIENT then
+    local music = {}
+
+    local function create_track(path)
+        local sound = CreateSound(game.GetWorld(), path)
+        sound:SetSoundLevel(0)
+
+        return sound
+    end
+
+    local function stop_music(except)
+        for _, other in pairs(music) do
+            if other:IsPlaying() and other ~= except then
+                other:FadeOut(0.5)
+            end
+        end
+    end
+    local function play_track(sound)
+        if sound:IsPlaying() then
+            return
+        end
+
+        stop_music(sound)
+
+        sound:Play()
+    end
+
+    local function direct_music()  -- TODO Replace this with a proper server-side music director
+        local fakases = ents.FindByClass("npc_friendly_fakas")
+        local active = false
+
+        if #fakases < 1 then
+            stop_music()
+            return
+        end
+        for _, fakas in pairs(fakases) do
+            local target = fakas:GetTargetID()
+            print("CLIENT Target ID: " .. target)
+            if target == LocalPlayer():UserID() then
+                play_track(music.chase)
+                return  -- Nothing takes priority over chase, exit early
+            end
+            if target ~= 0 then
+                active = true
+            end
+        end
+
+        if active then
+            play_track(music.active)
+            return
+        end
+        play_track(music.inactive)
+    end
+
+    timer.Create("FakasFriendlyFakasTrackTimer", 1, 0, function()
+        if IsValid(game.GetWorld()) then  -- Sometimes this takes a while, not sure why...
+            music.inactive = create_track("fakas/friendly-npcs/fakas/inactive.wav")
+            music.active = create_track("fakas/friendly-npcs/fakas/active.wav")
+            music.chase = create_track("fakas/friendly-npcs/fakas/chase.wav")
+
+            timer.Create("FakasFriendlyFakasMusicTimer", 1, 0, direct_music)
+            timer.Remove("FakasFriendlyFakasTrackTimer")
+        end
+    end)
+
     net.Receive(CLOAK_STRING, function()
         local ent = Entity(net.ReadInt(32))
         if IsValid(ent) then
@@ -337,6 +497,8 @@ if CLIENT then
         end
     end)
 end
+
+
 
 list.Set("NPC", "npc_friendly_fakas", {
     Name = "Fakas",
