@@ -57,13 +57,11 @@ function ENT:should_target(ent)
     end
 
     local class = ent:GetClass()
-    print("Same class?")
-    print(class == self:GetClass())
-    return ent:IsNPC() and ent:Health() > 0 and not class:find("bullseye") and not class == self:GetClass()
+    return Fakas.Lib.NPCs.is_npc(ent) and ent:Health() > 0 and ent:GetMaxHealth() > 0 and ent:Alive() and not class:find("bullseye") and not class == self:GetClass()
 end
 
 function ENT:attack()
-    local targets = ents.FindInSphere(self:hit_source(), self.attack_range)
+    local targets = ents.FindInSphere(self:GetPos(), self.attack_range)
     local success = false
 
     for _, ent in pairs(targets) do
@@ -367,13 +365,14 @@ function ENT:chase_target(target)
     -- Lunge when we're close
     local distance = self:distance(target)
     local now = CurTime()
-    if now - self.last_lunge >= 3 and distance <= 7500 then
+    if now - self.last_lunge >= self.lunge_time and distance <= 7500 and self.can_lunge then
         -- Lunge at the target
+        print("Lunging!")
         self.last_lunge = now
         self.loco:SetDesiredSpeed(self.speed * 3)
-        self.loco:SetAcceleration(self.acceleration * 3)
+        self.loco:SetAcceleration(self.acceleration * 10)
         self.loco:SetDeceleration(self.deceleration * 0.5)
-    elseif now - self.last_lunge >= 1 or distance >= 6000 then
+    elseif now - self.last_lunge >= self.lunge_cooldown or distance >= 6000 or not self.can_lunge then
         -- Lunge period expired, return to normal speed
         self.loco:SetDesiredSpeed(self.speed)
         self.loco:SetAcceleration(self.acceleration)
@@ -447,6 +446,7 @@ function ENT:Initialize()
     if self.size == null then
         self.size = { Vector(-13, -13, 0), Vector(13, 13, 72) }
     end
+    self.resource_root = "fakas/friendly-npcs/" .. self.name
 
     if self.defaults == nil then
         self.defaults = {
@@ -492,6 +492,9 @@ function ENT:Initialize()
     self.last_jump = 0
     self.last_unstick = 0
     self.last_lunge = 0
+    self.can_lunge = true
+    self.lunge_cooldown = 5
+    self.lunge_time = 2
     self.unstick_attempts = 0
     self.current_target = nil
     self.move_path = nil

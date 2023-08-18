@@ -8,12 +8,14 @@ ENT.AutomaticFrameAdvance = false
 
 function ENT:Initialize()
     print("Initialising PNG!")
-    if self.material == nil then
-        self.material = Material("error")
-    end
 
     BaseClass.Initialize(self)
 
+    if self.name == "common" then
+        self.material = Material("error")
+    else
+        self.material = Material("fakas/friendly-npcs/" .. self.name .. "/primary.png")
+    end
     self.render_mode = RENDERMODE_TRANSCOLOR
     self:SetRenderMode(self.render_mode)
     self.RenderGroup = RENDERGROUP_TRANSLUCENT

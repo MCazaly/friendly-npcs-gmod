@@ -106,3 +106,7 @@ function Fakas.Lib.NPCs.create_convars(ent)
     )
     return convars
 end
+
+function Fakas.Lib.NPCs.is_npc(ent)
+    return ent:IsNPC() or ent:IsNextBot()
+end

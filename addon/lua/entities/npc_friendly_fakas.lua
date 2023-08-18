@@ -8,7 +8,6 @@ DEFINE_BASECLASS(ENT.Base)
 
 ENT.name = "fakas"
 ENT.pretty_name = "Fakas"
-ENT.material = Material("fakas/npc_fakas.png", "smooth mips")
 ENT.size = { Vector(-13, -13, 0), Vector(13, 13, 72) }
 
 local DECLOAKED = 0
@@ -62,7 +61,10 @@ function ENT:Initialize()
     self.attack_cooldown = 0.5
     self.attack_range = 75
     self.default_attack_range = 75
+    self.damage_scale = 1
     self.can_lunge = false
+    self.lunge_cooldown = 1
+    self.lunge_time = 5
     self.cloak_time = 1
     self.cloak_start = 0
     self.cloak_status = DECLOAKED
@@ -75,6 +77,13 @@ function ENT:Initialize()
     self.heal_rate = 25
     self.last_teleport = 0
     self.teleport_wait = 2
+    self.haste = 1
+    self.material = Material("fakas/npc_fakas.png", "smooth mips")  -- Avoid duplicating this, cloak breaks if we do
+    self.sounds = {
+        fadein = self.resource_root .. "/fadein.wav",
+        fadeout = self.resource_root .. "/fadeout.wav",
+        detected = self.resource_root .. "/detected.wav"
+    }
 end
 
 function ENT:SetupDataTables()
@@ -83,7 +92,7 @@ end
 
 function ENT:attack_target(target)
     self:knockback(target)
-    return self:Explode(self.convars.attack_damage:GetInt())
+    return self:Explode(self.convars.attack_damage:GetInt() * self.damage_scale)
 end
 
 function ENT:cloak_server()
@@ -94,8 +103,6 @@ function ENT:cloak_server()
 end
 
 function ENT:BehaveUpdate()
-    print(self.current_phase)
-
     BaseClass.BehaveUpdate(self)
 end
 
@@ -114,14 +121,12 @@ function ENT:cloak_client()
         end
     end)
 
-    local sound = "fakas/friendly-npcs/fakas/"
+    local sound = self.sounds.fadein
     if self.cloak_status == CLOAKING then
-        sound = sound .. "fadeout.wav"
-    else
-        sound = sound .."fadein.wav"
+        sound = self.sounds.fadeout
     end
     self:EmitSound(sound, 100)
-    end
+end
 
 function ENT:set_alpha(alpha)
     self.material:SetFloat("$alpha", alpha)
@@ -210,9 +215,7 @@ function ENT:teleport_pos(target)
         -- In the name of "fairness" we don't teleport inside players. Check their position history for a good spot.
         local trail = TRAILS[target:UserID()]
 
-        print(#trail)
         if #trail < 24 then
-            print("Not enough history!")
             -- Player hasn't built up enough position history yet
             return nil
         end
@@ -222,7 +225,6 @@ function ENT:teleport_pos(target)
                 -- We can fit here! Good for teleporting to.
                 return trail[ii]
             end
-            print("Can't fit!")
         end
         return nil -- Nowhere good to teleport to :(
     end
@@ -234,30 +236,24 @@ function ENT:update_target()
     local targets = {}
     for _, ply in pairs(player.GetAll()) do
         local teleport_pos = self:teleport_pos(ply)
-        print("Should I target " .. ply:Nick() .. "?")
-        print(self:should_target(ply))
-        print("What is the teleport_pos?")
-        print(teleport_pos)
 
         if self:should_target(ply) and teleport_pos ~= nil then
-            print("Insert to targets table!")
             table.insert(targets, {ply, teleport_pos})
         end
     end
 
     if #targets == 0 then
-        print("Couldn't find a good player to teleport to!")
         -- We didn't find a player, target an NPC or something destructible this round instead
         local npcs = {}
         local breakables = {}
         local ents = ents.GetAll()
         for _, ent in pairs(ents) do
-            if ent:IsNPC() and self:should_target(ent) then
+            if Fakas.Lib.NPCs.is_npc(ent) and self:should_target(ent) then
                 table.insert(npcs, {ent, self:teleport_pos(ent)})
                 continue
             end
 
-            if not ent:IsPlayer() and not ent:IsNPC() and ent:Alive() and ent:Health() > 0 then
+            if not ent:IsPlayer() and not Fakas.Lib.NPCs.is_npc(ent) and self:should_target(ent) then
                 table.insert(breakables, {ent, self:teleport_pos(ent)})
             end
         end
@@ -272,35 +268,54 @@ function ENT:update_target()
 
     if #targets > 0 then
         local target = Fakas.Lib.random_member(targets)
-        print("Set target:")
-        print(target[1])
         self:set_target(target[1])
-        print("Return pos:")
-        print(target[2])
         return target[2]
     end
 
     print("Couldn't find anything to target!")
+    self.haste = 1
     self:set_target(nil)
     return nil  -- Oh dear. Nothing to target...
+end
+
+function ENT:should_target(ent)
+    local class = ent:GetClass()
+    local should = BaseClass.should_target(self, ent) or (class == "prop_physics" and ent:Alive() and ent:Health() > 0 and ent:GetMaxHealth() > 0)
+
+    return should
 end
 
 function ENT:set_target(target)
     if not IsValid(target) or not target:Alive() then
         -- Not a valid target, reset to nil
         self.current_target = nil
-        self:SetTargetID(0)  -- Inactive music
+
+        if self.haste <= 1 then  -- Don't spam clients with changes while we're in haste
+            self:SetTargetID(0)  -- Inactive music
+        end
         return
     end
 
     -- Something we can actually target!
     self.current_target = target
-    print(target)
+    self.haste = 1
+    if self.current_target:GetClass() == "prop_physics" then
+        self.haste = 10
+    elseif Fakas.Lib.NPCs.is_npc(self.current_target) then
+        self.haste = 5
+    end
+
     if target:IsPlayer() then
         self:SetTargetID(target:UserID(self.current_target))  -- Chase music for target, active music for other players
         return
     end
     self:SetTargetID(-1)  -- Active music for all players
+end
+
+function ENT:attack_prop(ent)
+    -- Use explosions for prop attacks too
+    self:attack_target(ent)
+    BaseClass.attack_target(self, ent)
 end
 
 function ENT:phase_1()
@@ -316,22 +331,25 @@ end
 
 function ENT:phase_2()
     -- We've teleported away, wait until we're fully healed and the minimum time has elapsed
+    local detector = self:detected()
+    if IsValid(detector) then
+        self:EmitSound(self.sounds.detected, 100)
+        self:set_target(detector)
+        self:end_downtime()
+        return
+    end
+
     local now = CurTime()
     if now - self.downtime_last >= 1 then
         -- Heal until we've reached max health
         self:SetHealth(math.min(self:Health() + self.heal_rate, self:GetMaxHealth()))
     end
 
-    if self:Health() == self:GetMaxHealth() and now - self.downtime_start >= self.downtime_min then
+    if self:Health() == self:GetMaxHealth() and (now - self.downtime_start) * self.haste >= self.downtime_min then
         -- We're all healed up and we've waited the minimum duration, time to do some crimes
         local pos = self:update_target()
-        print("Final position:")
-        print(pos)
         if pos ~= nil then
-            print(self.current_target)
-            print("Teleport!")
             self:teleport(pos)
-            print("End downtime!")
             self:end_downtime()
         end
     end
@@ -346,7 +364,6 @@ function ENT:phase_3()
 
     if self.cloak_status ~= DECLOAKED then
         -- We'll give our victim a sporting chance - wait for the full decloak animation
-        print("Waiting for decloak!")
         return self:decloak()
     end
 
@@ -358,7 +375,6 @@ function ENT:phase_4()
     local now = CurTime()
     if not IsValid(self.current_target) or not self.current_target:Alive() or now - self.chase_start >= self.chase_time then
         -- We've lost our target or we've chased for too long, this one gets away...
-        print("Ending the chase!")
         self:end_chase()
         return
     end
@@ -366,18 +382,20 @@ function ENT:phase_4()
     self.attack_range = self.default_attack_range
     self.knockback_up = self.default_knockback_up
     self.attack_force = self.default_attack_force
+    self.damage_scale = 1
     self.can_lunge = false
 
     if not self:IsOnGround() then
-        -- Increase our attack range while we're in the air, to make airshots easier
-        self.attack_range = self.default_attack_range * 1.5
+        -- Increase our attack range while we're in the air to make airshots easier, but also decrease damage a bit
+        self.attack_range = self.default_attack_range * 2.3
+        self.damage_scale = 0.7
     end
-    if IsValid(self.current_target) and not self.current_target:IsOnGround() then
+    if not self.current_target:IsOnGround() then
         self.can_lunge = true  -- Fakas can only lunge at airborne targets
         -- Try not to launch already airborne targets too high, fall damage isn't fun
-        self.knockback_up = 0
-        -- IF we get a successful airshot, push them away a bit further so they have more time to escape
-        self.attack_force = self.default_attack_force * 1.5
+        self.knockback_up = self.default_knockback_up * 0.33
+        -- IF we get a successful airshot, push them away further so they have more time to escape
+        self.attack_force = self.default_attack_force * 2.75
     end
     self:chase_target(self.current_target)
     self:attempt_attack()
@@ -406,6 +424,17 @@ function ENT:end_chase()
     self.chase_start = nil
     self:set_target(nil)
     self.current_phase = 1
+end
+
+function ENT:detected()
+    local pos = self:GetPos()
+    local nearby = ents.FindInSphere(pos, self.attack_range)
+    for _, ent in pairs(nearby) do
+        if self:should_target(ent) and ent:IsPlayer() and not util.TraceLine(Fakas.Lib.trace(pos, ent:GetPos(), {self, ent})).Hit then
+            return ent
+        end
+    end
+    return nil
 end
 
 function ENT:phases()
@@ -461,7 +490,6 @@ if CLIENT then
         end
         for _, fakas in pairs(fakases) do
             local target = fakas:GetTargetID()
-            print("CLIENT Target ID: " .. target)
             if target == LocalPlayer():UserID() then
                 play_track(music.chase)
                 return  -- Nothing takes priority over chase, exit early
@@ -479,7 +507,7 @@ if CLIENT then
     end
 
     timer.Create("FakasFriendlyFakasTrackTimer", 1, 0, function()
-        if IsValid(game.GetWorld()) then  -- Sometimes this takes a while, not sure why...
+        if game.GetWorld() ~= nil then  -- Sometimes this takes a while, not sure why...
             music.inactive = create_track("fakas/friendly-npcs/fakas/inactive.wav")
             music.active = create_track("fakas/friendly-npcs/fakas/active.wav")
             music.chase = create_track("fakas/friendly-npcs/fakas/chase.wav")
