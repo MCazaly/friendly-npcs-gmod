@@ -1,4 +1,4 @@
--- TODO: Cloak detection, spectator view, music, reunite faklib, en-route cloak? backstab?
+-- TODO: TTT map reset breaks music? reunite FakLib
 
 
 AddCSLuaFile()
@@ -9,6 +9,24 @@ DEFINE_BASECLASS(ENT.Base)
 ENT.name = "fakas"
 ENT.pretty_name = "Fakas"
 ENT.size = { Vector(-13, -13, 0), Vector(13, 13, 70) }
+ENT.textures = {
+    "agent",
+    "anti",
+    "borg",
+    "bot",
+    "bw",
+    "colossal",
+    "freeman",
+    "hashirama",
+    "impmon",
+    "joker",
+    "naruto",
+    "nose",
+    "red",
+    "spy",
+    "sans",
+    "nappa",
+}
 
 local DECLOAKED = 0
 local CLOAKING = 1
@@ -117,7 +135,6 @@ if SERVER then
 end
 
 function ENT:Initialize()
-    -- print("Initialising Fakas!")
     self.defaults = {
         seek_range = 10000,
         seek_refresh = 1,
@@ -131,16 +148,18 @@ function ENT:Initialize()
 
     BaseClass.Initialize(self)
 
-    -- self:SetCollisionGroup(COLLISION_GROUP_PASSABLE_DOOR)  -- We don't want players to get stuck on us
+    self:SetCollisionGroup(COLLISION_GROUP_PASSABLE_DOOR)  -- We don't want players to get stuck on us
 
     self.knockback_up = 3
-    self.default_knockback_up = 3
+    self.default_knockback_up = 2.5
     self.attack_force = 250
     self.default_attack_force = 250
     self.attack_cooldown = 0.5
     self.attack_range = 75
     self.default_attack_range = 75
     self.damage_scale = 1
+    self.acceleration = 500
+    self.deceleration = 500
     self.can_lunge = false
     self.lunge_cooldown = 1
     self.lunge_time = 3
@@ -161,13 +180,27 @@ function ENT:Initialize()
     self.teleport_wait = 2
     self.haste = 1
     self.airshots = 0
-    self.material = Material("fakas/npc_fakas.png", "smooth mips")  -- Avoid duplicating this, cloak breaks if we do
+    self.max_distance = 3500
+    self.material = self:create_material()
     self.sounds = {
         fadein = self.resource_root .. "/fadein.wav",
         fadeout = self.resource_root .. "/fadeout.wav",
         detected = self.resource_root .. "/detected.wav"
     }
 end
+
+function ENT:create_material()
+    local override = nil
+    local month = os.date("*t").month
+    if month == 12 then
+        override = "christmas"
+    elseif month == 10 then
+        override = "pumpkin"
+    end
+
+    return BaseClass.create_material(self, override)
+end
+
 
 function ENT:OnTakeDamage(info)
     if info:IsExplosionDamage() then
@@ -212,17 +245,17 @@ function ENT:BehaveUpdate()
     BaseClass.BehaveUpdate(self)
 end
 
-function ENT:target_pos(target)
-    if not IsValid(target) or not target:IsInWorld() then
-        return nil
-    end
-
-    if not self:IsOnGround() and not target:IsOnGround() then
-        return target:GetPos()  -- We're probably attempting an airshot, aim straight for our target
-    end
-
-    return BaseClass.target_pos(self, target)
-end
+--function ENT:target_pos(target)
+--    if not IsValid(target) or not target:IsInWorld() then
+--        return nil
+--    end
+--
+--    if not self:IsOnGround() and not target:IsOnGround() then
+--        return target:GetPos()  -- We're probably attempting an airshot, aim straight for our target
+--    end
+--
+--    return BaseClass.target_pos(self, target)
+--end
 
 function ENT:cloak_client()
     self.cloak_start = CurTime() - 0.001  -- Start a millisecond behind
@@ -345,9 +378,10 @@ function ENT:teleport_pos(target)
         end
 
         for ii = #trail - 8, #trail - 16, -1 do  -- A sample of the last few positions, in reverse order
-            if self:can_fit(trail[ii]) then
-                -- We can fit here! Good for teleporting to.
-                return trail[ii]
+            local pos = trail[ii]
+            if pos:Distance(target:GetPos()) < self.max_distance and self:can_fit(pos) then
+                -- It's nearby and we can fit here! Good for teleporting to.
+                return pos
             end
         end
         return nil -- Nowhere good to teleport to :(
@@ -356,16 +390,25 @@ function ENT:teleport_pos(target)
     return target:GetPos()  -- We don't give a shit about being fair to NPCs or props.
 end
 
+function ENT:target_player(ply)
+    if not self:should_target(ply) then
+        return nil
+    end
+    local teleport_pos = self:teleport_pos(ply)
+    if teleport_pos ~= nil then
+        self:set_target(ply)
+        return teleport_pos
+    end
+end
+
 function ENT:update_target()
     if self:should_target(self.preferred_target) then
-        local teleport_pos = self:teleport_pos(self.preferred_target)
+        local teleport_pos = self:target_player(self.preferred_target)
         if teleport_pos ~= nil then
             self:set_target(self.preferred_target)
-            self.preferred_target = nil
             return teleport_pos
         end
     end
-    self.preferred_target = nil
 
     local targets = {}
     for _, ply in pairs(player.GetAll()) do
@@ -420,7 +463,6 @@ function ENT:set_target(target)
     if not IsValid(target) then
         -- Not a valid target, reset to nil
         self.current_target = nil
-        self.haste = 1
         return
     end
 
@@ -444,7 +486,18 @@ function ENT:phase_1()
     -- We've just spawned or we've stopped chasing, cloak and teleport away so we can heal and/or wait for a target
     if self.cloak_status ~= CLOAKED then
         self:cloak()
-    elseif self:teleport_random() then
+        return
+    end
+
+    -- Our preferred target is available, let's skip downtime and engage them.
+    local pos = self:target_player(self.preferred_target)
+    if pos ~= nil then
+        self:set_target(self.preferred_target)
+        self:teleport(pos)
+        self:start_chase()
+    end
+
+    if self:teleport_random() then
         self:start_downtime()
     end
 end
@@ -489,19 +542,28 @@ end
 
 function ENT:phase_4()
     -- Time to chase down our victim!
+    local should = self:should_target(self.current_target)  -- Our target is dead or unavailable
+    if not should then
+        return self:end_chase()
+    end
+
     local now = CurTime()
-    local should = self:should_target(self.current_target)  -- We've lost our target
     local chase_done = now - self.chase_start >= self.chase_time  -- We've chased too long
-    local lost = self.failed_paths >= 2  -- We can't reach our target
+    local too_far = self:target_distance() > self.max_distance  -- Our target is too far away
+    local lost = too_far or self.failed_paths >= 2  -- We can't reach our target
 
-    if not should or chase_done or lost then  -- For one reason or another, we need to end this chase :(
-        if not chase_done then
-            self.haste = 10  -- We didn't quite get our fill, let's go early next time...
-        end
-        if should and lost and not chase_done and self.current_target:IsPlayer() then
-            self.preferred_target = self.current_target  -- Let me show you why you shouldn't cheese my pathing...
-        end
+    print(self:target_distance())
 
+    if chase_done then
+        return self:end_chase()
+    end
+    if lost and self.current_target:IsPlayer() and not self.should_target(self.preferred_target) then
+        self.haste = math.max(self.haste, 5)  -- We didn't quite get our fill, let's go early next time...
+        self.preferred_target = self.current_target  -- Let me show you why you shouldn't cheese my pathing...
+        return self:end_chase()
+    end
+    if self:should_target(self.preferred_target) and self.preferred_target ~= self.current_target and self:target_player(self.preferred_target) then
+        -- Our preferred target is available - let's go kill them!
         return self:end_chase()
     end
 

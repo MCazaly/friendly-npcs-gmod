@@ -51,15 +51,15 @@ function ENT:distance(pos)
     return self:GetPos():Distance(pos)
 end
 
-function ENT:distance_to_ent(ent)
+function ENT:ent_distance(ent)
     if IsValid(ent) then
         return self:distance(ent:GetPos())
     end
     return nil
 end
 
-function ENT:distance_to_target()
-    return self:distance_to_ent(self.current_target)
+function ENT:target_distance()
+    return self:ent_distance(self.current_target)
 end
 
 function ENT:should_target(ent)
@@ -254,7 +254,7 @@ function ENT:jump_at_target(target)
         return false
     end
 
-    local distance = self:distance(target)
+    local distance = self:classic_distance(target)
     local height = target:GetPos().z - self:GetPos().z
 
     if distance <= math.pow(self.attack_range + 200, 2) and height >= self.attack_range then
@@ -294,7 +294,7 @@ function ENT:path(destination)
     return true
 end
 
-function ENT:distance(target)
+function ENT:classic_distance(target)
     return (target:GetPos() - self:GetPos()):Length2DSqr()
 end
 
@@ -400,7 +400,7 @@ end
 
 function ENT:lunge(target)
     -- Lunge when we're close
-    local distance = self:distance(target)
+    local distance = self:classic_distance(target)
     local now = CurTime()
 
     if now - self.last_lunge >= self.lunge_time and distance <= 7500 and self.can_lunge then
