@@ -108,5 +108,9 @@ function Fakas.Lib.NPCs.create_convars(ent)
 end
 
 function Fakas.Lib.NPCs.is_npc(ent)
-    return ent:IsNPC() or ent:IsNextBot()
+    return IsValid(ent) and ent:IsNPC() or ent:IsNextBot()
+end
+
+function Fakas.Lib.is_spectator(ply)
+    return IsValid(ply) and ply:IsPlayer() and ply:GetObserverMode() ~= OBS_MODE_NONE
 end

@@ -47,17 +47,52 @@ function ENT:seek_target()
     return target
 end
 
+function ENT:distance(pos)
+    return self:GetPos():Distance(pos)
+end
+
+function ENT:distance_to_ent(ent)
+    if IsValid(ent) then
+        return self:distance(ent:GetPos())
+    end
+    return nil
+end
+
+function ENT:distance_to_target()
+    return self:distance_to_ent(self.current_target)
+end
+
 function ENT:should_target(ent)
-    if not IsValid(ent) then
-        return false
-    end
+    return IsValid(ent) and self:targetable_ent(ent)
+end
 
-    if ent:IsPlayer() then
-        return ent:Alive() and not self.ignore_players:GetBool()
-    end
+function ENT:targetable_player(ent)
+    return not self.ignore_players:GetBool() and
+        ent:IsPlayer() and
+        not Fakas.Lib.is_spectator(ent) and
+        ent:Alive() and
+        ent:Health() > 0
+end
 
-    local class = ent:GetClass()
-    return Fakas.Lib.NPCs.is_npc(ent) and ent:Health() > 0 and ent:GetMaxHealth() > 0 and ent:Alive() and not class:find("bullseye") and not class == self:GetClass()
+function ENT:targetable_npc(ent)
+    return Fakas.Lib.NPCs.is_npc(ent) and not self:is_ally(ent)
+end
+
+function ENT:targetable_prop(_)
+    -- Most NPCs won't target props. They can override this method if they do.
+    return false
+end
+
+function ENT:targetable_ent(ent)
+    return not ent:GetClass():find("bullseye") and (
+        self:targetable_player(ent) or
+        self:targetable_npc(ent) or
+        self:targetable_prop(ent)
+    )
+end
+
+function ENT:is_ally(ent)
+    return ent:GetClass() == self:GetClass()
 end
 
 function ENT:attack()
@@ -83,10 +118,25 @@ end
 
 function ENT:knockback(target)
     if target:IsNPC() or (target:IsPlayer() and not IsValid(target:GetVehicle())) then
-        local upward = vector_up * self.attack_force * self.knockback_up
-        local yeet = self:hit_direction(target:GetPos()) * self.attack_force + upward
-        target:SetVelocity(target:GetVelocity() + yeet)
+        local direction = self:hit_direction(target:GetPos())
+        if target:IsOnGround() then
+            direction.z = math.max(direction.z, -0.5)
+        else
+            direction.z = math.max(direction.z, -0.8)
+        end
+        -- print("HIT DIRECTION:")
+        -- print(direction)
+        -- print(target:IsOnGround())
+        local yeet = direction * self.attack_force + self:calculate_vertical_knockback(target)
+        --if target:IsPlayer() then
+        --    target:SetVelocity(-target:GetVelocity())  -- Zero the player's momentum
+        --end
+        target:SetVelocity(yeet)
     end
+end
+
+function ENT:calculate_vertical_knockback(_)
+    return vector_up * self.attack_force * self.knockback_up
 end
 
 function ENT:attack_target(target)
@@ -156,17 +206,6 @@ function ENT:damage_target(ent)
     return false
 end
 
-function ENT:OnTakeDamage(info)
-    if info:IsExplosionDamage() then
-        info:ScaleDamage(0)
-    elseif not self.m_bApplyingDamage then
-        self.m_bApplyingDamage = true
-        self:TakeDamageInfo(info)
-        self.m_bApplyingDamage = false
-        return true
-    end
-end
-
 function ENT:Explode(damage)
     local attacker = nil
     if IsValid(self) then
@@ -230,20 +269,29 @@ function ENT:teleport(pos)
 end
 
 function ENT:path(destination)
-    if CurTime() - self.failed_pathing < 5 then
-        -- Pathing went wrong, wait a few seconds before we attempt this again
-        return
-    end
-
     local start = SysTime()
-    self.move_path:Compute(self, destination)
-
-    if SysTime() - start > 0.005 then
-        -- Pathing took longer than 5ms, indicating a problem, instigate a cooldown so we don't lag the server
-        self.failed_pathing = CurTime()
+    if start - self.failed_pathing < 5 or destination == null then
+        -- Pathing went wrong, wait a bit before we attempt this again
+        return false
     end
-    
-    return self.move_path:IsValid()
+
+
+    if not self.move_path:Compute(self, destination) then
+        -- No valid path to our target :(
+        self.failed_paths = self.failed_paths + 1
+        self.failed_pathing = start
+        print("Can't reach the target!!!")
+        return false
+    end
+    local finish = SysTime()
+    self.failed_paths = 0
+
+    if finish - start > 0.005 then
+        -- Pathing failed took longer than 5ms, instigate a cooldown so we don't lag the server
+        self.failed_pathing = finish
+    end
+
+    return true
 end
 
 function ENT:distance(target)
@@ -350,47 +398,62 @@ function ENT:update_target()
     end
 end
 
-function ENT:chase_target(target)
-    -- Find the floor under the target - that's our destination
-    local target_position = target:GetPos()
-    local line = util.TraceEntity(
-        Fakas.Lib.trace(
-                target_position,
-                target_position - Vector(0, 0, 16384), -- This should cast directly to the floor
-                target
-        ),
-        target
-    )
-
+function ENT:lunge(target)
     -- Lunge when we're close
     local distance = self:distance(target)
     local now = CurTime()
+
     if now - self.last_lunge >= self.lunge_time and distance <= 7500 and self.can_lunge then
         -- Lunge at the target
-        print("Lunging!")
+        -- print("Lunging!")
         self.last_lunge = now
-        self.loco:SetDesiredSpeed(self.speed * 3)
-        self.loco:SetAcceleration(self.acceleration * 10)
-        self.loco:SetDeceleration(self.deceleration * 0.5)
+        self.loco:SetDesiredSpeed(self.speed * self.lunge_speed)
+        self.loco:SetAcceleration(self.acceleration * self.lunge_accel)
+        self.loco:SetDeceleration(self.deceleration * self.lunge_decel)
     elseif now - self.last_lunge >= self.lunge_cooldown or distance >= 6000 or not self.can_lunge then
         -- Lunge period expired, return to normal speed
         self.loco:SetDesiredSpeed(self.speed)
         self.loco:SetAcceleration(self.acceleration)
         self.loco:SetDeceleration(self.deceleration)
     end
+end
+
+function ENT:target_pos(target)
+    -- Find the floor under the target - that's our destination
+
+    if not IsValid(target) or not target:IsInWorld() then
+        return nil
+    end
+
+    local pos = target:GetPos()
+    local line = util.TraceEntity(
+            Fakas.Lib.trace(
+                    pos,
+                    pos - Vector(0, 0, 16384), -- This should cast directly to the floor
+                    target
+            ),
+            target
+    )
 
     if line.Hit and util.IsInWorld(line.HitPos) then
         -- Double check that the target position is inside the world
-        target_position = line.HitPos
+        return line.HitPos
     end
+    return pos
+end
+
+function ENT:chase_target(target)
+    self:lunge(target)
 
     if self:can_jump() then
         self:jump_at_target(self.current_target)
     end
 
-    if self:path(target_position) then
-        return self:move()
+    if self:path(self:target_pos(target)) then
+        self:move()
+        return true
     end
+    return false
 end
 
 function ENT:chase()
@@ -435,8 +498,10 @@ function ENT:phases()
 end
 
 function ENT:Initialize()
-    print("Initialising base!")
     -- Base defaults
+    if self.scale == nil then
+        self.scale = 1
+    end
     if self.name == nil then
         self.name = "common"
     end
@@ -444,8 +509,10 @@ function ENT:Initialize()
         self.pretty_name = "Friendly Base NPC"
     end
     if self.size == null then
-        self.size = { Vector(-13, -13, 0), Vector(13, 13, 72) }
+        self.size = { Vector(-13, -13, 0), Vector(13, 13, 70) }
     end
+    self:SetModelScale(self.scale)
+    self:set_collision_bounds(self.size[1], self.size[2])
     self.resource_root = "fakas/friendly-npcs/" .. self.name
 
     if self.defaults == nil then
@@ -486,6 +553,7 @@ function ENT:Initialize()
     }
 
     self.failed_pathing = 0
+    self.failed_paths = 0
     self.last_seek = 0
     self.last_path = 0
     self.last_attack = 0
@@ -495,8 +563,12 @@ function ENT:Initialize()
     self.can_lunge = true
     self.lunge_cooldown = 5
     self.lunge_time = 2
+    self.lunge_speed = 3
+    self.lunge_accel = 3
+    self.lunge_decel = 0.5
     self.unstick_attempts = 0
     self.current_target = nil
+    self.preferred_target = nil
     self.move_path = nil
     self.current_phase = nil
     self.alive = true
@@ -561,6 +633,15 @@ end
 
 function ENT:OnReloaded()
     self:Initialize()
+end
+
+function ENT:OnRemove()
+    -- Placeholder
+end
+
+function ENT:set_collision_bounds(min, max)
+    -- To be overridden for special cases, like PNGs!
+    self:SetCollisionBounds(min, max)
 end
 
 list.Set("NPC", "npc_friendly_common", {
