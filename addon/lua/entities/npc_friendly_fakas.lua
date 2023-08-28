@@ -683,7 +683,8 @@ if CLIENT then
     end
 
     local function setup_tracks()
-        if IsValid(ply) then
+        if IsValid(LocalPlayer()) then
+            print("Initialising music!")
             music[INACTIVE] = create_track("fakas/friendly-npcs/fakas/inactive.wav")
             music[ACTIVE] = create_track("fakas/friendly-npcs/fakas/active.wav")
             music[CHASE] = create_track("fakas/friendly-npcs/fakas/chase.wav")
