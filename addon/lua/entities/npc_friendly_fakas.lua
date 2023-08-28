@@ -489,16 +489,16 @@ function ENT:phase_1()
         return
     end
 
-    -- Our preferred target is available, let's skip downtime and engage them.
     local pos = self:target_player(self.preferred_target)
     if pos ~= nil then
+        -- Our preferred target is available, let's skip downtime and engage them.
         self:set_target(self.preferred_target)
         self:teleport(pos)
-        self:start_chase()
+        return self:start_chase()
     end
 
     if self:teleport_random() then
-        self:start_downtime()
+        return self:start_downtime()
     end
 end
 
@@ -661,9 +661,8 @@ if CLIENT then
     end
 
     local function create_track(path)
-        local sound = CreateSound(game.GetWorld(), path)
+        local sound = CreateSound(LocalPlayer(), path)
         sound:SetSoundLevel(0)
-
         return sound
     end
 
@@ -680,11 +679,24 @@ if CLIENT then
         end
 
         stop_music(sound)
-
         sound:Play()
     end
 
-    hook.Add("PlayerSpawn", "FakasFriendlyFakasPlayerSpawn", update_cloaks)
+    local function setup_tracks()
+        if IsValid(ply) then
+            music[INACTIVE] = create_track("fakas/friendly-npcs/fakas/inactive.wav")
+            music[ACTIVE] = create_track("fakas/friendly-npcs/fakas/active.wav")
+            music[CHASE] = create_track("fakas/friendly-npcs/fakas/chase.wav")
+            return true
+        end
+        return false
+    end
+
+    -- Sometimes TTT likes to invalidate our music when the round changes, so we'll try and fix it
+    hook.Add("TTTBeginRound", "FakasFriendlyFakasMusicSetup", setup_tracks)
+    -- Make sure clients know how visible Fakas should be.
+    hook.Add("InitPostEntity", "FakasFriendlyFakasPlayerSpawn", update_cloaks)
+
     timer.Create("FakasFriendlyFakasSpectatorTimer", 1, 0, function()
         local ply = LocalPlayer()
         if not IsValid(ply) then
@@ -700,13 +712,8 @@ if CLIENT then
     end)
 
     timer.Create("FakasFriendlyFakasTrackTimer", 1, 0, function()
-        local world = game.GetWorld()
-        if world ~= nil and world:IsWorld() then  -- Sometimes this takes a while, not sure why...
-            music[INACTIVE] = create_track("fakas/friendly-npcs/fakas/inactive.wav")
-            music[ACTIVE] = create_track("fakas/friendly-npcs/fakas/active.wav")
-            music[CHASE] = create_track("fakas/friendly-npcs/fakas/chase.wav")
-
-            music_ready = true
+        if not music_ready then  -- Sometimes this takes a while, not sure why...
+            music_ready = setup_tracks()
             timer.Remove("FakasFriendlyFakasTrackTimer")
         end
     end)
