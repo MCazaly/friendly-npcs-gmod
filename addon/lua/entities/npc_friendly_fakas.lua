@@ -1,4 +1,4 @@
--- TODO: TTT map reset breaks music? reunite FakLib
+-- TODO: TTT map reset breaks music? Die on round end, reunite FakLib
 
 
 AddCSLuaFile()
@@ -222,6 +222,37 @@ end
 function ENT:OnRemove()
     hook.Remove("Think", self.cloak_hook)
     BaseClass.OnRemove(self)
+end
+
+function ENT:attack()
+    -- When dealing with explosions, we only attack once per cycle and always assume it's a success
+    local targets = ents.FindInSphere(self:GetPos(), self.attack_range)
+    local target = nil
+    local prop = nil
+
+    for _, ent in pairs(targets) do
+
+        local targetable_prop = self:targetable_prop(ent)
+        if self:should_target(ent) and not targetable_prop then
+            target = ent
+            break
+        elseif prop == nil and targetable_prop then
+            prop = self.current_target
+        end
+    end
+
+    if target ~= nil then
+        self:attack_target(target)
+        self.last_attack = CurTime()
+        return true
+    elseif prop ~= nil then
+        self:attack_prop(prop)
+        -- Wait longer after attacking a prop, spamming explosions hurts performance
+        self.last_attack = CurTime() + 1
+        return true
+    end
+
+    return false
 end
 
 function ENT:attack_target(target)
@@ -494,7 +525,7 @@ function ENT:phase_1()
         -- Our preferred target is available, let's skip downtime and engage them.
         self:set_target(self.preferred_target)
         self:teleport(pos)
-        return self:start_chase()
+        return self:end_downtime()
     end
 
     if self:teleport_random() then
@@ -552,7 +583,7 @@ function ENT:phase_4()
     local too_far = self:target_distance() > self.max_distance  -- Our target is too far away
     local lost = too_far or self.failed_paths >= 2  -- We can't reach our target
 
-    print(self:target_distance())
+    -- print(self:target_distance())
 
     if chase_done then
         return self:end_chase()
@@ -560,10 +591,12 @@ function ENT:phase_4()
     if lost and self.current_target:IsPlayer() and not self.should_target(self.preferred_target) then
         self.haste = math.max(self.haste, 5)  -- We didn't quite get our fill, let's go early next time...
         self.preferred_target = self.current_target  -- Let me show you why you shouldn't cheese my pathing...
+        print(self.preferred_target:Nick() .. " is now my preferred target!")
         return self:end_chase()
     end
     if self:should_target(self.preferred_target) and self.preferred_target ~= self.current_target and self:target_player(self.preferred_target) then
         -- Our preferred target is available - let's go kill them!
+        print("Rerouting to preferred target!")
         return self:end_chase()
     end
 
@@ -599,6 +632,9 @@ function ENT:reveal(culprit)
     -- Something damaged us or got close enough to see through our cloak!
     if self:should_target(culprit) then
         self:set_target(culprit)
+        if culprit:IsPlayer() then
+            self.preferred_target = culprit  -- You really shouldn't disturb my nap-time...
+        end
     end
     self:EmitSound(self.sounds.detected, 100)
     self:end_downtime()
@@ -618,15 +654,16 @@ function ENT:end_downtime()
 end
 
 function ENT:start_chase()
-    local now = CurTime()
-    self.chase_start = now
+    self.failed_paths = 0
     self.current_phase = 4
+    self.chase_start = CurTime()
 end
 
 function ENT:end_chase()
+    self.failed_paths = 0
+    self.current_phase = 1
     self.chase_start = nil
     self:set_target(nil)
-    self.current_phase = 1
 end
 
 function ENT:detected()
@@ -661,7 +698,7 @@ if CLIENT then
     end
 
     local function create_track(path)
-        local sound = CreateSound(LocalPlayer(), path)
+        local sound = CreateSound(game.GetWorld(), path)
         sound:SetSoundLevel(0)
         return sound
     end
@@ -683,7 +720,8 @@ if CLIENT then
     end
 
     local function setup_tracks()
-        if IsValid(LocalPlayer()) then
+        local world = game.GetWorld()
+        if IsValid(LocalPlayer()) and world ~= nil and world:IsWorld() then
             print("Initialising music!")
             music[INACTIVE] = create_track("fakas/friendly-npcs/fakas/inactive.wav")
             music[ACTIVE] = create_track("fakas/friendly-npcs/fakas/active.wav")

@@ -112,7 +112,6 @@ function ENT:attack()
     if success then
         self.last_attack = CurTime()
     end
-
     return success
 end
 
