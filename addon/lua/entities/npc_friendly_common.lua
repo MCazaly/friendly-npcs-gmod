@@ -8,7 +8,10 @@ local function navmesh_error(ent)
     PrintMessage(HUD_PRINTTALK, "Sorry, " .. ent.pretty_name .. " needs a map with a navmesh to work!")
 end
 
-
+local TARGET_BLACKLIST = {
+    "npc_barnacle",
+    "bullseye"
+}
 
 ENT.Base = "base_nextbot"
 DEFINE_BASECLASS(ENT.Base)
@@ -84,7 +87,12 @@ function ENT:targetable_prop(_)
 end
 
 function ENT:targetable_ent(ent)
-    return not ent:GetClass():find("bullseye") and (
+    for _, class in pairs(TARGET_BLACKLIST) do
+        if ent:GetClass():find(class) then
+            return false
+        end
+    end
+    return (
         self:targetable_player(ent) or
         self:targetable_npc(ent) or
         self:targetable_prop(ent)
@@ -568,6 +576,7 @@ function ENT:Initialize()
     self.unstick_attempts = 0
     self.current_target = nil
     self.preferred_target = nil
+    self.last_target = nil
     self.move_path = nil
     self.current_phase = nil
     self.alive = true

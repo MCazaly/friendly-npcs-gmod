@@ -1,4 +1,4 @@
--- TODO: TTT map reset breaks music? Die on round end, reunite FakLib
+-- TODO: TTT map reset breaks music? delay round end until all fakases are dead, fakas grenade, disable pings while cloaked, reunite FakLib
 
 
 AddCSLuaFile()
@@ -98,7 +98,7 @@ if SERVER then
             return
         end
         for _, ply in ipairs(player.GetAll()) do
-            if targets[ply:UserID()] ~= null then
+            if targets[ply:UserID()] ~= null or Fakas.Lib.is_spectator(ply) then
                 send_music(CHASE, ply)
             else
                 send_music(ACTIVE, ply)
@@ -132,6 +132,16 @@ if SERVER then
             ent:Explode(100)
         end
     end)
+    if engine.ActiveGamemode() == "terrortown" then
+        hook.Add("TTTEndRound", "FriendlyNPCsFakasCleanupTTTEndRound", function()
+            for _, fakas in ents.FindByClass("npc_friendly_fakas") do
+                if IsValid(fakas) then
+                    fakas:Remove()
+                end
+            end
+        end)
+    end
+
 end
 
 function ENT:Initialize()
@@ -396,7 +406,7 @@ function ENT:can_fit(pos)
 end
 
 function ENT:teleport_pos(target)
-    if not target:IsValid() then
+    if not IsValid(target) then
         return nil
     end
     if target:IsPlayer() then
@@ -433,18 +443,29 @@ function ENT:target_player(ply)
 end
 
 function ENT:update_target()
+    local teleport_pos = nil
     if self:should_target(self.preferred_target) then
-        local teleport_pos = self:target_player(self.preferred_target)
+        teleport_pos = self:target_player(self.preferred_target)
         if teleport_pos ~= nil then
             self:set_target(self.preferred_target)
             return teleport_pos
         end
     end
 
+    teleport_pos = self:teleport_pos(self.last_target)
+    local last_choice = nil
+    if self:should_target(self.last_target) and teleport_pos ~= nil then
+        last_choice = {self.last_target, teleport_pos}
+    end
+
     local targets = {}
     for _, ply in pairs(player.GetAll()) do
-        local teleport_pos = self:teleport_pos(ply)
+        if ply == self.last_target then
+            -- This is the last player we targeted. We'll try not to harass them again this cycle if we can avoid it
+            continue
+        end
 
+        teleport_pos = self:teleport_pos(ply)
         if self:should_target(ply) and teleport_pos ~= nil then
             table.insert(targets, {ply, teleport_pos})
         end
@@ -474,13 +495,18 @@ function ENT:update_target()
         end
     end
 
+    if #targets == 0 and last_choice ~= nil then
+        print("Uh oh, we're falling back to our last choice!")
+        table.insert(targets, last_choice)
+    end
+
     if #targets > 0 then
         local target = Fakas.Lib.random_member(targets)
         self:set_target(target[1])
         return target[2]
     end
 
-    -- print("Couldn't find anything to target!")
+    print("Couldn't find anything to target!")
     self:set_target(nil)
     return nil  -- Oh dear. Nothing to target...
 end
@@ -491,6 +517,10 @@ function ENT:targetable_prop(ent)
 end
 
 function ENT:set_target(target)
+    if self:should_target(self.current_target) and self.current_target:IsPlayer() then
+        self.last_target = self.current_target
+    end
+
     if not IsValid(target) then
         -- Not a valid target, reset to nil
         self.current_target = nil
