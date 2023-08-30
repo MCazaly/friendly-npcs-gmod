@@ -1,4 +1,9 @@
--- TODO: TTT map reset breaks music? delay round end until all fakases are dead, fakas grenade, disable pings while cloaked, reunite FakLib
+-- TODO: Music doesn't work on dedicated server?
+-- TODO: delay round end until all fakases are dead
+-- TODO: minimum distance from the ground before reducing vertical knockback
+-- TODO: fakas grenade
+-- TODO: disable pings while cloaked
+-- TODO: reunite FakLib
 
 
 AddCSLuaFile()
@@ -42,7 +47,19 @@ local CLOAK_STRING = "FakasFriendlyCloak"
 local MUSIC_STRING = "FakasFriendlyMusic"
 local TRAILS = {}
 
+local function get_fakases()
+    local fakases = {}
+    for fakas in _, pairs(ents.FindByClass("npc_friendly_fakas")) do
+        if IsValid(fakas) and fakas.alive then
+            table.insert(fakases, fakas)
+        end
+    end
+
+    return fakases
+end
+
 if SERVER then
+
     local function send_music(mode, ply)
         if ply == nil then
             ply = player.GetAll()
@@ -63,7 +80,8 @@ if SERVER then
     end
 
     local function direct_music()  -- TODO Replace this with a reusable music director
-        local fakases = ents.FindByClass("npc_friendly_fakas")
+        print("Directing music...")
+        local fakases = get_fakases()
         local haste = false
 
         if #fakases < 1 then
@@ -84,7 +102,6 @@ if SERVER then
             active = true
 
             if valid_current and fakas.current_target:IsPlayer() then
-                -- print(fakas.current_target:Nick() .. " is a player!")
                 targets[fakas.current_target:UserID()] = fakas.current_target
                 continue
             end
@@ -99,9 +116,11 @@ if SERVER then
         end
         for _, ply in ipairs(player.GetAll()) do
             if targets[ply:UserID()] ~= null or Fakas.Lib.is_spectator(ply) then
+                print("Sending CHASE to " .. ply:Nick())
                 send_music(CHASE, ply)
             else
                 send_music(ACTIVE, ply)
+                print("Sending ACTIVE to " .. ply:Nick())
             end
         end
     end
@@ -128,20 +147,44 @@ if SERVER then
     timer.Create("FakasFriendlyFakasMusicTimer", 1, 0, direct_music)
 
     hook.Add("EntityRemoved", "FriendlyNPCsFakasDeath", function(ent)
-        if IsValid(ent) and ent:GetClass() == "npc_friendly_fakas" and ent.alive == false then
+        if IsValid(ent) and ent:GetClass() == "npc_friendly_fakas" and not ent.alive then
             ent:Explode(100)
         end
     end)
+
     if engine.ActiveGamemode() == "terrortown" then
-        hook.Add("TTTEndRound", "FriendlyNPCsFakasCleanupTTTEndRound", function()
-            for _, fakas in ents.FindByClass("npc_friendly_fakas") do
+        -- TTT2-specific functionality.
+        hook.Add("TTTEndRound", "FriendlyNPCsFakasTTTEndRound", function()
+            -- Remove any active Fakases on round end.
+            for _, fakas in pairs(get_fakases()) do
                 if IsValid(fakas) then
                     fakas:Remove()
                 end
             end
         end)
-    end
 
+        local function fakas_ttt_win()
+            if #get_fakases() > 0 then
+                -- Want to win? You have to kill Fakas first.
+                return WIN_NONE
+            end
+        end
+
+        hook.Add("TTT2RolesLoaded", "FriendlyNPCsFakasTTT2Setup", function()
+            roles.InitCustomTeam(
+                "fakas",
+                {
+                    icon = "",  -- TODO
+                    color = Color(255, 106, 0, 1)
+                }
+            )
+
+            hook.Add("TTT2ModifyWinningAlives", "FriendlyNPCsFakasTTT2ModifyAlive", function(aliveTeams)
+                table.insert(aliveTeams, TEAM_FAKAS)
+            end)
+        end)
+
+    end
 end
 
 function ENT:Initialize()
@@ -191,6 +234,7 @@ function ENT:Initialize()
     self.haste = 1
     self.airshots = 0
     self.max_distance = 3500
+    self.teleport_gap = 150
     self.material = self:create_material()
     self.sounds = {
         fadein = self.resource_root .. "/fadein.wav",
@@ -420,7 +464,13 @@ function ENT:teleport_pos(target)
 
         for ii = #trail - 8, #trail - 16, -1 do  -- A sample of the last few positions, in reverse order
             local pos = trail[ii]
-            if pos:Distance(target:GetPos()) < self.max_distance and self:can_fit(pos) then
+            local distance = pos:Distance(target:GetPos())
+            local min_distance = self.teleport_gap
+            if self.haste > 1 then
+                -- We'll get a bit closer when haste is active.
+                min_distance = self.teleport_gap / 2
+            end
+            if distance <= self.max_distance and distance >= self.teleport_gap and self:can_fit(pos) then
                 -- It's nearby and we can fit here! Good for teleporting to.
                 return pos
             end
@@ -565,6 +615,8 @@ end
 
 function ENT:phase_2()
     -- We've teleported away, wait until we're fully healed and the minimum time has elapsed
+
+
     local detector = self:detected()
     if IsValid(detector) then
         return self:reveal(detector)
@@ -722,7 +774,7 @@ if CLIENT then
     local last_obs_mode = nil
 
     local function update_cloaks()
-        for _, fakas in pairs(ents.FindByClass("npc_friendly_fakas")) do
+        for _, fakas in pairs(get_fakases()) do
             fakas:set_alpha(fakas:alpha_progress())
         end
     end
@@ -780,13 +832,6 @@ if CLIENT then
 
     end)
 
-    timer.Create("FakasFriendlyFakasTrackTimer", 1, 0, function()
-        if not music_ready then  -- Sometimes this takes a while, not sure why...
-            music_ready = setup_tracks()
-            timer.Remove("FakasFriendlyFakasTrackTimer")
-        end
-    end)
-
     net.Receive(CLOAK_STRING, function()
         local ent = Entity(net.ReadInt(32))
         if IsValid(ent) then
@@ -796,12 +841,13 @@ if CLIENT then
     end)
 
     net.Receive(MUSIC_STRING, function()
-        if not music_ready then  -- Music hasn't been set up yet, we'll wait for the next one
+        if not music_ready then
+            music_ready = setup_tracks()
             return
         end
 
         local mode = net.ReadInt(3)
-        -- print("MODE: " .. mode)
+        print("MUSIC MODE: " .. mode)
         if mode == NONE then
             return stop_music()
         end
