@@ -49,7 +49,7 @@ local TRAILS = {}
 
 local function get_fakases()
     local fakases = {}
-    for fakas in _, pairs(ents.FindByClass("npc_friendly_fakas")) do
+    for _, fakas in pairs(ents.FindByClass("npc_friendly_fakas")) do
         if IsValid(fakas) and fakas.alive then
             table.insert(fakases, fakas)
         end
@@ -151,9 +151,11 @@ if SERVER then
             ent:Explode(100)
         end
     end)
+end
 
-    if engine.ActiveGamemode() == "terrortown" then
-        -- TTT2-specific functionality.
+if engine.ActiveGamemode() == "terrortown" then
+    -- TTT2-specific functionality.
+    if SERVER then
         hook.Add("TTTEndRound", "FriendlyNPCsFakasTTTEndRound", function()
             -- Remove any active Fakases on round end.
             for _, fakas in pairs(get_fakases()) do
@@ -169,22 +171,22 @@ if SERVER then
                 return WIN_NONE
             end
         end
+    end
 
-        hook.Add("TTT2RolesLoaded", "FriendlyNPCsFakasTTT2Setup", function()
-            roles.InitCustomTeam(
+
+    hook.Add("TTT2RolesLoaded", "FriendlyNPCsFakasTTT2Setup", function()
+        roles.InitCustomTeam(
                 "fakas",
                 {
                     icon = "",  -- TODO
-                    color = Color(255, 106, 0, 1)
+                    color = Color(255, 106, 0, 255)
                 }
-            )
+        )
 
-            hook.Add("TTT2ModifyWinningAlives", "FriendlyNPCsFakasTTT2ModifyAlive", function(aliveTeams)
-                table.insert(aliveTeams, TEAM_FAKAS)
-            end)
+        hook.Add("TTT2ModifyWinningAlives", "FriendlyNPCsFakasTTT2ModifyAlive", function(aliveTeams)
+            table.insert(aliveTeams, TEAM_FAKAS)
         end)
-
-    end
+    end)
 end
 
 function ENT:Initialize()
@@ -615,7 +617,10 @@ end
 
 function ENT:phase_2()
     -- We've teleported away, wait until we're fully healed and the minimum time has elapsed
-
+    if self.cloak_status ~= CLOAKED then
+        self:cloak()
+        return
+    end
 
     local detector = self:detected()
     if IsValid(detector) then
@@ -655,6 +660,8 @@ end
 
 function ENT:phase_4()
     -- Time to chase down our victim!
+    self:decloak()
+
     local should = self:should_target(self.current_target)  -- Our target is dead or unavailable
     if not should then
         return self:end_chase()
