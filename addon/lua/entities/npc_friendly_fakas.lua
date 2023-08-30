@@ -1,9 +1,12 @@
--- TODO: Music doesn't work on dedicated server?
--- TODO: delay round end until all fakases are dead
+-- TODO: make sure round can end normally when all Fakases are gone.
 -- TODO: minimum distance from the ground before reducing vertical knockback
 -- TODO: fakas grenade
 -- TODO: disable pings while cloaked
+-- TODO: Hitbox seems small again?
 -- TODO: reunite FakLib
+-- TODO: How Unfortunate remove unused ents it creates
+-- TODO: How Unfortunate minigames
+
 
 
 AddCSLuaFile()
@@ -184,8 +187,18 @@ if engine.ActiveGamemode() == "terrortown" then
         )
 
         hook.Add("TTT2ModifyWinningAlives", "FriendlyNPCsFakasTTT2ModifyAlive", function(aliveTeams)
-            table.insert(aliveTeams, TEAM_FAKAS)
+            if #get_fakases() > 0 then
+                table.insert(aliveTeams, TEAM_FAKAS)
+            end
         end)
+    end)
+
+    hook.Add("TTT2CanUsePointer", "FriendlyNPCsFakasTTT2AllowPointer", function(ply, mode, _, ent)
+        if not IsValid(ply) or not IsValid(ent) or ent:GetClass() ~= "npc_friendly_fakas" then
+            return
+        end
+
+        return ent.cloak_status == DECLOAKED or mode == PMODE_SPEC
     end)
 end
 
