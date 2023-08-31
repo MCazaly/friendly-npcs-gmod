@@ -5,7 +5,7 @@ AddCSLuaFile()
 ENT.Base = "npc_friendly_common"
 DEFINE_BASECLASS(ENT.Base)
 ENT.AutomaticFrameAdvance = false
-ENT.scale = 3
+ENT.scale = 5
 ENT.textures = {}
 
 function ENT:Initialize()

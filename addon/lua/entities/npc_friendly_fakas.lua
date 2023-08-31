@@ -1,15 +1,130 @@
+-- TODO: give loot to killer
 -- TODO: make sure round can end normally when all Fakases are gone.
--- TODO: minimum distance from the ground before reducing vertical knockback
 -- TODO: fakas grenade
 -- TODO: disable pings while cloaked
 -- TODO: Hitbox seems small again?
 -- TODO: reunite FakLib
--- TODO: How Unfortunate remove unused ents it creates
+-- TODO: How Unfortunate remove unused ents
 -- TODO: How Unfortunate minigames
 
 
 
 AddCSLuaFile()
+
+if Fakas == nil then
+    Fakas = {}
+end
+if Fakas.Lib == nil then
+    Fakas.Lib = {}
+end
+function Fakas.Lib.world_elevation(ent)
+    local pos = ent:GetPos()
+    local line = util.TraceLine(
+        Fakas.Lib.trace(
+            pos,
+            pos - Vector(0, 0, 16384), -- This should cast directly to the floor
+            ents.GetAll()
+        )
+    )
+
+    if line.Hit and util.IsInWorld(line.HitPos) then
+        -- Double check that the target position is inside the world
+        return math.abs(line.HitPos.z - pos.z)
+    end
+end
+function Fakas.Lib.random_remove(tbl)
+    return table.remove(tbl, math.random(#tbl))
+end
+
+if Fakas.Lib.Loot == nil then
+    Fakas.Lib.Loot = {}
+    Fakas.Lib.Loot.mode = engine.ActiveGamemode()
+end
+
+function Fakas.Lib.Loot.grant(ply, guaranteed, random, random_max)
+    -- Give a player some loot, can be random items or guaranteed items, or both!
+    if not IsValid(ply) or not ply:IsPlayer() or not ply:Alive() then
+        return false
+    end
+
+    -- Fetch our randomly generated loot and then add the guaranteed items on top
+    local loot = Fakas.Lib.Loot.select(random, random_max)
+    for _, name in pairs(guaranteed) do
+        local class = Fakas.Lib.Loot.get(name)
+        if class then
+            table.insert(loot, class)
+        else
+            print(string.format("Warning: Guaranteed loot class '%s' was not found!"), name)
+        end
+    end
+
+    -- Give the player all the items they should receive
+    for _, class in pairs(loot) do
+        Fakas.Lib.Loot.give(ply, class)
+    end
+end
+
+function Fakas.Lib.Loot.select(names, max)
+    -- Randomly select valid classes from a list of class names, up to a certain number.
+    -- Does not return duplicates, unless the same name is provided more than once.
+
+    -- Start by verifying that the requested classes exist, discarding them if they don't.
+    local all_classes = {}
+    for _, name in pairs(names) do
+        local class = Fakas.Lib.Loot.get(name)
+        if class then
+            table.insert(all_classes, class)
+        end
+    end
+
+    -- We can only give as many "unique" classes as we've verified, or up to the specified max, whichever is lower.
+    local quantity = math.min(#all_classes, max)
+    if #all_classes == quantity then
+        return all_classes
+    end
+
+    -- Make our random selection and return the results.
+    local classes = {}
+    for _ = 1, #quantity do
+        table.insert(classes, Fakas.Lib.random_remove(all_classes))
+    end
+    return classes
+end
+
+function Fakas.Lib.Loot.get(name, mode)
+    -- Get the class for a given item, weapon, or other gamemode-specific thing that can be given to a player.
+    -- Nil if the class does not exist.
+    if mode == nil then
+        mode = Fakas.Lib.Loot.mode
+    end
+
+    if mode == "terrortown" then  -- TTT2
+        return weapons.GetStored(name) or items.GetStored(name)
+    else
+        print(string.format("Warning: Loot not implemented for mode '%s'!", mode))
+    end
+end
+
+function Fakas.Lib.Loot.give(ply, class, mode)
+    -- Award a single loot class directly to a player.
+    if mode == nil then
+        mode = Fakas.Lib.Loot.mode
+    end
+
+    if mode == "terrortown" then
+        -- TTT2 treats weapons and items a bit differently, so we handle that here.
+        if class.Base:find("^item_") then
+            return IsValid(ply:GiveEquipmentItem(class.ClassName))
+        elseif class.Base:find("^weapon_") then
+            return IsValid(ply:GiveEquipmentWeapon(class.ClassName))
+        else
+            print(string.format("Cannot grant '%s' as it has an unrecognised base!"), class.ClassName)
+        end
+    else
+        error(string.format("Loot not implemented for mode '%s'!", mode))
+    end
+end
+
 
 ENT.Base = "npc_friendly_png"
 DEFINE_BASECLASS(ENT.Base)
@@ -62,7 +177,6 @@ local function get_fakases()
 end
 
 if SERVER then
-
     local function send_music(mode, ply)
         if ply == nil then
             ply = player.GetAll()
@@ -510,11 +624,15 @@ end
 function ENT:update_target()
     local teleport_pos = nil
     if self:should_target(self.preferred_target) then
+        -- Try to go for our preferred target first
         teleport_pos = self:target_player(self.preferred_target)
         if teleport_pos ~= nil then
             self:set_target(self.preferred_target)
             return teleport_pos
         end
+    else
+        -- Our preference is no longer a valid target, time to move on...
+        self.preferred_target = nil
     end
 
     teleport_pos = self:teleport_pos(self.last_target)
@@ -675,8 +793,11 @@ function ENT:phase_4()
     -- Time to chase down our victim!
     self:decloak()
 
-    local should = self:should_target(self.current_target)  -- Our target is dead or unavailable
-    if not should then
+    if not self:should_target(self.current_target) then
+        -- Our target is dead or otherwise unavailable
+        if self.current_target == self.preferred_target then
+            self.preferred_target = nil
+        end
         return self:end_chase()
     end
 
@@ -685,9 +806,8 @@ function ENT:phase_4()
     local too_far = self:target_distance() > self.max_distance  -- Our target is too far away
     local lost = too_far or self.failed_paths >= 2  -- We can't reach our target
 
-    -- print(self:target_distance())
-
     if chase_done then
+        self.preferred_target = nil  -- Okay, you get away this time.
         return self:end_chase()
     end
     if lost and self.current_target:IsPlayer() and not self.should_target(self.preferred_target) then
@@ -711,23 +831,35 @@ function ENT:phase_4()
         self.airshots = 0
         self:chase_target(self.current_target)
     else
-        -- Increase our attack range while we're in the air to make airshots easier, but also decrease damage a bit
+        -- Increase our attack range while we're in the air to make airshots easier, but also decrease damage
         self.attack_range = self.default_attack_range * math.min(self.airshots + 2.25, 3)
         self.damage_scale = 0.5
     end
+
     if not self.current_target:IsOnGround() then
+        local force_multiplier = 1.25
+        local min_multiplier = 1.1
+        local airshot_value = 1
+        if Fakas.Lib.world_elevation(self.current_target) <= 100 then
+            -- If they're below this height, they're probably just jumping - adjust knockback accordingly.
+            force_multiplier = 1
+            min_multiplier = 1
+            -- We don't count airshots unless they're above this height.
+            airshot_value = 0
+        end
         -- Try not to launch already airborne targets too high, fall damage isn't fun
         self.knockback_up = self.default_knockback_up / math.min(self.airshots + 2.25, 5)
-        -- IF we get a successful airshot, push them away further so they have more time to escape
-        self.attack_force = self.default_attack_force * math.max(self.airshots * 1.25, 1.1)
+        -- If we get a successful airshot, push them away further so they have more time to escape
+        self.attack_force = self.default_attack_force * math.max(self.airshots * force_multiplier, min_multiplier)
 
         if self:attempt_attack() then
-            self.airshots = self.airshots + 1
-            -- print("Airshots: " .. self.airshots)
+            self.airshots = self.airshots + airshot_value
+            print("Elevation: " .. Fakas.Lib.world_elevation(self.current_target))
+            print("Airshots: " .. self.airshots)
         end
         return
     end
-    self:attempt_attack()
+    return self:attempt_attack()
 end
 
 function ENT:reveal(culprit)
