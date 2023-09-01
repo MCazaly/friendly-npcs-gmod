@@ -1,7 +1,6 @@
 -- TODO: give loot to killer
 -- TODO: make sure round can end normally when all Fakases are gone.
 -- TODO: fakas grenade
--- TODO: disable pings while cloaked
 -- TODO: Hitbox seems small again?
 -- TODO: reunite FakLib
 -- TODO: How Unfortunate remove unused ents
@@ -405,6 +404,31 @@ end
 function ENT:OnRemove()
     hook.Remove("Think", self.cloak_hook)
     BaseClass.OnRemove(self)
+end
+
+function ENT:OnKilled(info)
+    local attacker = info:GetAttacker()
+    if IsValid(attacker) and attacker:IsPlayer() and Fakas.Lib.Loot.grant(
+        attacker,
+        {"item_ttt_noexplosiondmg"},
+        {
+            "weapon_ttt_sandwich",
+            "weapon_ttt_teleport",
+            "weapon_ttt_slam",
+            "weapon_ttt_c4",
+            "weapon_ttt_mine_turtle",
+            "weapon_ttt_jihad_bomb",
+            "weapon_ttt_rmgrenade",
+            "ttt_tf2rocketlauncher",
+            "weapon_ttt_confgrenade_s",
+            "weapon_ttt_gimnade",
+            "weapon_megumin"
+        },
+        1
+    ) then
+        attacker:ChatPrint("Fakas smiles upon you! You have been granted a boon.")
+    end
+    BaseClass.OnKilled(self, info)
 end
 
 function ENT:attack()
