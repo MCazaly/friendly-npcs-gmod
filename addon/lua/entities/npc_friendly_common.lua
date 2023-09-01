@@ -238,6 +238,11 @@ function ENT:OnKilled(info)
     end
 end
 
+function ENT:GetSubRole()
+    -- This fixes an annoying error from badly coded TTT addons
+    return -999999
+end
+
 
 
 function ENT:hit_source()
@@ -287,7 +292,7 @@ function ENT:path(destination)
         -- No valid path to our target :(
         self.failed_paths = self.failed_paths + 1
         self.failed_pathing = start
-        print("Can't reach the target!!!")
+        -- print("Can't reach the target!!!")
         return false
     end
     local finish = SysTime()

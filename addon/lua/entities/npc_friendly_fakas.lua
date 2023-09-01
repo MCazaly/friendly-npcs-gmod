@@ -1,7 +1,8 @@
--- TODO: give loot to killer
--- TODO: make sure round can end normally when all Fakases are gone.
--- TODO: fakas grenade
--- TODO: Hitbox seems small again?
+-- TODO: Prioritise last target over NPCs and props
+-- TODO: Alternate, weaker attack for people with explosion immunity?
+-- TODO: A cap on the health regen?
+-- TODO: Boss-only health bar.
+-- TODO: grenade
 -- TODO: reunite FakLib
 -- TODO: How Unfortunate remove unused ents
 -- TODO: How Unfortunate minigames
@@ -25,11 +26,12 @@ function Fakas.Lib.world_elevation(ent)
             ents.GetAll()
         )
     )
-
     if line.Hit and util.IsInWorld(line.HitPos) then
         -- Double check that the target position is inside the world
         return math.abs(line.HitPos.z - pos.z)
     end
+
+    return -1
 end
 function Fakas.Lib.random_remove(tbl)
     return table.remove(tbl, math.random(#tbl))
@@ -53,7 +55,7 @@ function Fakas.Lib.Loot.grant(ply, guaranteed, random, random_max)
         if class then
             table.insert(loot, class)
         else
-            print(string.format("Warning: Guaranteed loot class '%s' was not found!"), name)
+            -- print(string.format("Warning: Guaranteed loot class '%s' was not found!"), name)
         end
     end
 
@@ -61,6 +63,8 @@ function Fakas.Lib.Loot.grant(ply, guaranteed, random, random_max)
     for _, class in pairs(loot) do
         Fakas.Lib.Loot.give(ply, class)
     end
+
+    return #loot
 end
 
 function Fakas.Lib.Loot.select(names, max)
@@ -84,7 +88,7 @@ function Fakas.Lib.Loot.select(names, max)
 
     -- Make our random selection and return the results.
     local classes = {}
-    for _ = 1, #quantity do
+    for _ = 1, quantity do
         table.insert(classes, Fakas.Lib.random_remove(all_classes))
     end
     return classes
@@ -98,9 +102,13 @@ function Fakas.Lib.Loot.get(name, mode)
     end
 
     if mode == "terrortown" then  -- TTT2
-        return weapons.GetStored(name) or items.GetStored(name)
+        local class = weapons.GetStored(name) or items.GetStored(name)
+        if class then
+            return class
+        end
+        -- print(string.format("Warning: TTT2 Loot class '%s' was not found!"), name)
     else
-        print(string.format("Warning: Loot not implemented for mode '%s'!", mode))
+        -- print(string.format("Warning: Loot not implemented for mode '%s'!", mode))
     end
 end
 
@@ -117,7 +125,7 @@ function Fakas.Lib.Loot.give(ply, class, mode)
         elseif class.Base:find("^weapon_") then
             return IsValid(ply:GiveEquipmentWeapon(class.ClassName))
         else
-            print(string.format("Cannot grant '%s' as it has an unrecognised base!"), class.ClassName)
+            -- print(string.format("Cannot grant '%s' as it has an unrecognised base!"), class.ClassName)
         end
     else
         error(string.format("Loot not implemented for mode '%s'!", mode))
@@ -160,9 +168,13 @@ local INACTIVE = 0
 local ACTIVE = 1
 local CHASE = 2
 
-local CLOAK_STRING = "FakasFriendlyCloak"
-local MUSIC_STRING = "FakasFriendlyMusic"
+local CLOAK_STRING = "FakasFriendlyFakasCloak"
+local MUSIC_STRING = "FakasFriendlyFakasMusic"
+local KILL_STRING = "FakasFriendlyFakasKill"
 local TRAILS = {}
+
+local ORANGE = Color(255, 106, 0, 255)
+local WHITE = Color(255, 255, 255, 255)
 
 local function get_fakases()
     local fakases = {}
@@ -173,6 +185,46 @@ local function get_fakases()
     end
 
     return fakases
+end
+
+local function kill_message(killer)
+    if SERVER then
+        local not_killer = RecipientFilter()
+        not_killer:AddAllPlayers()
+        if IsValid(killer) and killer:IsPlayer() then
+            not_killer:RemovePlayer(killer)
+            -- One message for the killer.
+            net.Start(KILL_STRING)
+            net.WriteBool(true)
+            net.Send(killer)
+        end
+        -- One message for everyone else.
+        net.Start(KILL_STRING)
+        net.WriteBool(false)
+        net.Send(not_killer)
+        return
+    end
+
+    if net.ReadBool() then
+        chat.AddText(
+            ORANGE,
+            "Fakas ",
+            WHITE,
+            "smiles upon you! You have been granted a ",
+            ORANGE,
+            "boon",
+            WHITE,
+            "."
+        )
+    else
+        chat.AddText(
+            ORANGE,
+            "Fakas",
+            WHITE,
+            ": fuck"
+        )
+    end
+    surface.PlaySound("misc/sniper_railgun_double_kill.wav")
 end
 
 if SERVER then
@@ -196,7 +248,7 @@ if SERVER then
     end
 
     local function direct_music()  -- TODO Replace this with a reusable music director
-        print("Directing music...")
+        -- print("Directing music...")
         local fakases = get_fakases()
         local haste = false
 
@@ -232,11 +284,11 @@ if SERVER then
         end
         for _, ply in ipairs(player.GetAll()) do
             if targets[ply:UserID()] ~= null or Fakas.Lib.is_spectator(ply) then
-                print("Sending CHASE to " .. ply:Nick())
+                -- print("Sending CHASE to " .. ply:Nick())
                 send_music(CHASE, ply)
             else
                 send_music(ACTIVE, ply)
-                print("Sending ACTIVE to " .. ply:Nick())
+                -- print("Sending ACTIVE to " .. ply:Nick())
             end
         end
     end
@@ -245,6 +297,7 @@ if SERVER then
     -- Set up networking
     util.AddNetworkString(CLOAK_STRING)
     util.AddNetworkString(MUSIC_STRING)
+    util.AddNetworkString(KILL_STRING)
 
     -- Start tracking player coordinates
     timer.Create("FakasFriendlyPlayerTracker", 1, 0, function()  -- Log each player's coordinates once every second
@@ -295,7 +348,7 @@ if engine.ActiveGamemode() == "terrortown" then
                 "fakas",
                 {
                     icon = "",  -- TODO
-                    color = Color(255, 106, 0, 255)
+                    color = ORANGE
                 }
         )
 
@@ -407,26 +460,30 @@ function ENT:OnRemove()
 end
 
 function ENT:OnKilled(info)
-    local attacker = info:GetAttacker()
-    if IsValid(attacker) and attacker:IsPlayer() and Fakas.Lib.Loot.grant(
-        attacker,
-        {"item_ttt_noexplosiondmg"},
-        {
-            "weapon_ttt_sandwich",
-            "weapon_ttt_teleport",
-            "weapon_ttt_slam",
-            "weapon_ttt_c4",
-            "weapon_ttt_mine_turtle",
-            "weapon_ttt_jihad_bomb",
-            "weapon_ttt_rmgrenade",
-            "ttt_tf2rocketlauncher",
-            "weapon_ttt_confgrenade_s",
-            "weapon_ttt_gimnade",
-            "weapon_megumin"
-        },
-        1
-    ) then
-        attacker:ChatPrint("Fakas smiles upon you! You have been granted a boon.")
+    if SERVER then
+        local attacker = info:GetAttacker()
+        if engine.ActiveGamemode() == "terrortown" and IsValid(attacker) and attacker:IsPlayer() and Fakas.Lib.Loot.grant(
+            attacker,
+            {"item_ttt_noexplosiondmg"},
+            {
+                "weapon_ttt_sandwich",
+                "weapon_ttt_teleport",
+                "weapon_ttt_slam",
+                "weapon_ttt_c4",
+                "weapon_ttt_mine_turtle",
+                "weapon_ttt_jihad_bomb",
+                "weapon_ttt_rmgrenade",
+                "ttt_tf2rocketlauncher",
+                "weapon_ttt_confgrenade_s",
+                "weapon_ttt_gimnade",
+                "weapon_megumin"
+            },
+            1
+        ) > 0 then
+            kill_message(attacker)  -- Only send the nice message if we're actually giving them something.
+        else
+            kill_message(nil)
+        end
     end
     BaseClass.OnKilled(self, info)
 end
@@ -703,7 +760,7 @@ function ENT:update_target()
     end
 
     if #targets == 0 and last_choice ~= nil then
-        print("Uh oh, we're falling back to our last choice!")
+        -- print("Uh oh, we're falling back to our last choice!")
         table.insert(targets, last_choice)
     end
 
@@ -713,7 +770,7 @@ function ENT:update_target()
         return target[2]
     end
 
-    print("Couldn't find anything to target!")
+    -- print("Couldn't find anything to target!")
     self:set_target(nil)
     return nil  -- Oh dear. Nothing to target...
 end
@@ -837,12 +894,12 @@ function ENT:phase_4()
     if lost and self.current_target:IsPlayer() and not self.should_target(self.preferred_target) then
         self.haste = math.max(self.haste, 5)  -- We didn't quite get our fill, let's go early next time...
         self.preferred_target = self.current_target  -- Let me show you why you shouldn't cheese my pathing...
-        print(self.preferred_target:Nick() .. " is now my preferred target!")
+        -- print(self.preferred_target:Nick() .. " is now my preferred target!")
         return self:end_chase()
     end
     if self:should_target(self.preferred_target) and self.preferred_target ~= self.current_target and self:target_player(self.preferred_target) then
         -- Our preferred target is available - let's go kill them!
-        print("Rerouting to preferred target!")
+        -- print("Rerouting to preferred target!")
         return self:end_chase()
     end
 
@@ -878,8 +935,8 @@ function ENT:phase_4()
 
         if self:attempt_attack() then
             self.airshots = self.airshots + airshot_value
-            print("Elevation: " .. Fakas.Lib.world_elevation(self.current_target))
-            print("Airshots: " .. self.airshots)
+            -- print("Elevation: " .. Fakas.Lib.world_elevation(self.current_target))
+            -- print("Airshots: " .. self.airshots)
         end
         return
     end
@@ -980,7 +1037,7 @@ if CLIENT then
     local function setup_tracks()
         local world = game.GetWorld()
         if IsValid(LocalPlayer()) and world ~= nil and world:IsWorld() then
-            print("Initialising music!")
+            -- print("Initialising music!")
             music[INACTIVE] = create_track("fakas/friendly-npcs/fakas/inactive.wav")
             music[ACTIVE] = create_track("fakas/friendly-npcs/fakas/active.wav")
             music[CHASE] = create_track("fakas/friendly-npcs/fakas/chase.wav")
@@ -1023,12 +1080,14 @@ if CLIENT then
         end
 
         local mode = net.ReadInt(3)
-        print("MUSIC MODE: " .. mode)
+        -- print("MUSIC MODE: " .. mode)
         if mode == NONE then
             return stop_music()
         end
         play_track(music[mode])
     end)
+    
+    net.Receive(KILL_STRING, kill_message)
 end
 
 
