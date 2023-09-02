@@ -39,7 +39,13 @@ end
 
 if Fakas.Lib.Loot == nil then
     Fakas.Lib.Loot = {}
-    Fakas.Lib.Loot.mode = engine.ActiveGamemode()
+    Fakas.Lib.Loot.modes = {
+        SBOX = 1,
+        TTT2 = 2
+    }
+    if TTT2 then
+        Fakas.Lib.Loot.mode = Fakas.Lib.Loot.modes.TTT2
+    end
 end
 
 function Fakas.Lib.Loot.grant(ply, guaranteed, random, random_max)
@@ -101,14 +107,14 @@ function Fakas.Lib.Loot.get(name, mode)
         mode = Fakas.Lib.Loot.mode
     end
 
-    if mode == "terrortown" then  -- TTT2
+    if Fakas.Lib.Loot.mode == Fakas.Lib.Loot.modes.TTT2 then  -- TTT2 gamemode
         local class = weapons.GetStored(name) or items.GetStored(name)
         if class then
             return class
         end
-        -- print(string.format("Warning: TTT2 Loot class '%s' was not found!"), name)
+        print(string.format("Warning: TTT2 Loot class '%s' was not found!"), name)
     else
-        -- print(string.format("Warning: Loot not implemented for mode '%s'!", mode))
+        print(string.format("Warning: Loot not implemented for mode '%s'!", mode))
     end
 end
 
@@ -118,7 +124,7 @@ function Fakas.Lib.Loot.give(ply, class, mode)
         mode = Fakas.Lib.Loot.mode
     end
 
-    if mode == "terrortown" then
+    if Fakas.Lib.Loot.mode == Fakas.Lib.Loot.modes.TTT2 then
         -- TTT2 treats weapons and items a bit differently, so we handle that here.
         if class.Base:find("^item_") then
             return IsValid(ply:GiveEquipmentItem(class.ClassName))
@@ -322,7 +328,7 @@ if SERVER then
     end)
 end
 
-if engine.ActiveGamemode() == "terrortown" then
+if TTT2 then
     -- TTT2-specific functionality.
     if SERVER then
         hook.Add("TTTEndRound", "FriendlyNPCsFakasTTTEndRound", function()
@@ -407,7 +413,8 @@ function ENT:Initialize()
     self.chase_start = nil
     self.chase_time = 45
     self.downtime_min = 15
-    self.downtime_start = nil
+    self.downtime_max = 25
+    self.downtime_end = nil
     self.downtime_last = nil
     self.heal_rate = 25
     self.last_teleport = 0
@@ -462,7 +469,7 @@ end
 function ENT:OnKilled(info)
     if SERVER then
         local attacker = info:GetAttacker()
-        if engine.ActiveGamemode() == "terrortown" and IsValid(attacker) and attacker:IsPlayer() and Fakas.Lib.Loot.grant(
+        if TTT2 and IsValid(attacker) and attacker:IsPlayer() and Fakas.Lib.Loot.grant(
             attacker,
             {"item_ttt_noexplosiondmg"},
             {
@@ -492,34 +499,43 @@ function ENT:attack()
     -- When dealing with explosions, we only attack once per cycle and always assume it's a success
     local targets = ents.FindInSphere(self:GetPos(), self.attack_range)
     local target = nil
-    local prop = nil
 
     for _, ent in pairs(targets) do
-
-        local targetable_prop = self:targetable_prop(ent)
-        if self:should_target(ent) and not targetable_prop then
-            target = ent
+        if not self:should_target(ent) then
+            continue
+        end
+        target = ent
+        if target == self.current_target then  -- Always prioritise our current target
             break
-        elseif prop == nil and targetable_prop then
-            prop = self.current_target
         end
     end
 
-    if target ~= nil then
-        self:attack_target(target)
-        self.last_attack = CurTime()
-        return true
-    elseif prop ~= nil then
-        self:attack_prop(prop)
+    if target == nil then
+        return false
+    end
+    self.last_attack = CurTime()
+    if self:targetable_prop(target) then
+        self:attack_prop(target)
         -- Wait longer after attacking a prop, spamming explosions hurts performance
-        self.last_attack = CurTime() + 1
-        return true
+        self.last_attack = self.last_attack + 1
+    else
+        self:attack_target(target)
     end
 
-    return false
+    return true
 end
 
 function ENT:attack_target(target)
+    if TTT2 and IsValid(target) and target:IsPlayer() and target:HasEquipmentItem("item_ttt_noexplosiondmg") then
+        -- Our target is a killjoy and immune to explosions - we have to do this the old-fashioned way :(
+        if self:ent_distance(target) > self.default_attack_range then
+            return false  -- Melee attacks have a shorter range than explosions!
+        end
+        self.damage_scale = 0.5
+        local success = BaseClass.attack_target(self, target)
+        self.damage_scale = 1
+        return success
+    end
     self:knockback(target)
     self:Explode(self.convars.attack_damage:GetInt() * self.damage_scale)
     return true
@@ -537,8 +553,26 @@ function ENT:cloak_server()
 end
 
 function ENT:BehaveUpdate()
+    self.haste = math.min(self.haste, 1)
+    local haste_conditions = {
+        -- Speedrun prop murder
+        {self:should_target(self.current_target) and self.current_target:GetClass() == "prop_physics", 10},
+        -- Speedrun through NPCs, but not quite as quickly
+        {self:should_target(self.current_target) and Fakas.Lib.NPCs.is_npc(self.current_target), 5},
+        -- We get impatient while waiting for our preferred target
+        {self.should_target(self.preferred_target), 2},
+        -- Not much time left!
+        {TTT2 and GetGlobalFloat("ttt_round_end") - CurTime() <= 60, 2}
+    }
+
+    for _, condition in pairs(haste_conditions) do
+        if condition[1] then
+            self.haste = math.max(self.haste, condition[2])
+        end
+    end
+
     BaseClass.BehaveUpdate(self)
-end
+    end
 
 --function ENT:target_pos(target)
 --    if not IsValid(target) or not target:IsInWorld() then
@@ -735,8 +769,11 @@ function ENT:update_target()
         end
     end
 
-    if #targets == 0 then
-        -- We didn't find a player, target an NPC or something destructible this round instead
+    if #targets == 0 and last_choice ~= nil then
+        -- We always prioritise players over NPCs and props, even if they're our last target.
+        table.insert(targets, last_choice)
+    elseif #targets == 0 then
+        -- We didn't find a player, target an NPC or something destructible this round instead.
         local npcs = {}
         local breakables = {}
         local ents = ents.GetAll()
@@ -752,16 +789,12 @@ function ENT:update_target()
         end
 
         if #npcs > 0 then
+            -- Prioritise NPCs over props
             targets = npcs
-        end
-        if #breakables > 0 then
+        elseif #breakables > 0 then
+            -- When there's nothing alive for us to go after, we start breaking props
             targets = breakables
         end
-    end
-
-    if #targets == 0 and last_choice ~= nil then
-        -- print("Uh oh, we're falling back to our last choice!")
-        table.insert(targets, last_choice)
     end
 
     if #targets > 0 then
@@ -793,16 +826,11 @@ function ENT:set_target(target)
 
     -- Something we can actually target!
     self.current_target = target
-    self.haste = 1
-    if self.current_target:GetClass() == "prop_physics" then
-        self.haste = 10
-    elseif Fakas.Lib.NPCs.is_npc(self.current_target) then
-        self.haste = 5
-    end
 end
 
 function ENT:attack_prop(ent)
     -- Use explosions for prop attacks too
+    print("Attack prop!")
     BaseClass.attack_target(self, ent)
     return self:attack_target(ent)
 end
@@ -845,7 +873,7 @@ function ENT:phase_2()
         self:SetHealth(math.min(self:Health() + self.heal_rate, self:GetMaxHealth()))
     end
 
-    if self:Health() == self:GetMaxHealth() and (now - self.downtime_start) * self.haste >= self.downtime_min then
+    if now >= self.downtime_end then
         -- We're all healed up and we've waited the minimum duration, time to do some crimes
         local pos = self:update_target()
         if pos ~= nil then
@@ -877,6 +905,7 @@ function ENT:phase_4()
     if not self:should_target(self.current_target) then
         -- Our target is dead or otherwise unavailable
         if self.current_target == self.preferred_target then
+            -- Our preferred target is gone :(
             self.preferred_target = nil
         end
         return self:end_chase()
@@ -892,9 +921,7 @@ function ENT:phase_4()
         return self:end_chase()
     end
     if lost and self.current_target:IsPlayer() and not self.should_target(self.preferred_target) then
-        self.haste = math.max(self.haste, 5)  -- We didn't quite get our fill, let's go early next time...
         self.preferred_target = self.current_target  -- Let me show you why you shouldn't cheese my pathing...
-        -- print(self.preferred_target:Nick() .. " is now my preferred target!")
         return self:end_chase()
     end
     if self:should_target(self.preferred_target) and self.preferred_target ~= self.current_target and self:target_player(self.preferred_target) then
@@ -958,13 +985,12 @@ end
 function ENT:start_downtime()
     local now = CurTime()
     self.downtime_last = now
-    self.downtime_start = now
+    self.downtime_end = now + (math.random(self.downtime_min, self.downtime_max) / math.min(self.haste, 10))
     self.current_phase = 2
 end
 
 function ENT:end_downtime()
     self.downtime_last = nil
-    self.downtime_start = nil
     self.current_phase = 3
 end
 

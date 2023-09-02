@@ -208,9 +208,16 @@ function ENT:damage_target(ent)
         info:SetDamage(self.convars.attack_damage:GetInt())
         info:SetDamageForce(self:hit_direction(ent:GetPos()) * self.attack_force + vector_up * 500)
         ent:TakeDamageInfo(info)
+        self:attack_sound(ent)
         return ent:Health() < health  -- Did we successfully deal some damage?
     end
     return false
+end
+
+function ENT:attack_sound(target)
+    target:EmitSound(
+        string.format("physics/body/body_medium_impact_hard%d.wav", math.random(1, 6))
+    )
 end
 
 function ENT:Explode(damage)
@@ -553,6 +560,7 @@ function ENT:Initialize()
     self.attack_force = 500
     self.attack_cooldown = 1
     self.attack_range = 75
+    self.damage_scale = 1
 
     self.defaults = {
         seek_range = 10000,
