@@ -14,7 +14,6 @@ DEFINE_BASECLASS(SWEP.Base)
 SWEP.Kind = WEAPON_EQUIP2
 SWEP.WeaponID = AMMO_MOLOTOV
 SWEP.HoldType = "grenade"
-SWEP.CanBuy = {ROLE_TRAITOR}
 SWEP.InLoadoutFor = nil
 SWEP.LimitedStock = true
 SWEP.AllowDrop = true
@@ -28,8 +27,13 @@ SWEP.UseHands = true
 SWEP.Slot = 7
 SWEP.Weight = 5
 SWEP.AutoSpawnable = false
-
-
+SWEP.CanBuy = nil
+SWEP.notBuyable = true
+if SERVER and navmesh.GetNavAreaCount() > 0 then  -- TODO Manage Faklib better.
+    -- NPCs don't work well (or often at all!) without a navmesh.
+    SWEP.CanBuy = {ROLE_TRAITOR}
+    SWEP.notBuyable = false
+end
 if CLIENT then
     SWEP.PrintName = "PNG Grenade"
     SWEP.Icon = "fakas/friendly-npcs/fakas/primary.png"

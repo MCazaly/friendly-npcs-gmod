@@ -1,3 +1,4 @@
+-- TODO: Grenade isn't appearing in shops even on maps with a Navmesh. Can I refresh the shop? Can I update the
 -- TODO: Test the grenade more
 -- TODO: Only make the grenade available if the map has a navmesh
 -- TODO: Boss-only health bar.
