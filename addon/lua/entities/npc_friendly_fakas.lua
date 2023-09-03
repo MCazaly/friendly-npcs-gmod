@@ -1,8 +1,7 @@
--- TODO: Prioritise last target over NPCs and props
--- TODO: Alternate, weaker attack for people with explosion immunity?
--- TODO: A cap on the health regen?
+-- TODO: Test the grenade more
+-- TODO: Only make the grenade available if the map has a navmesh
 -- TODO: Boss-only health bar.
--- TODO: grenade
+-- TODO: Generic chat message framework, use pretty name and colour attributes
 -- TODO: reunite FakLib
 -- TODO: How Unfortunate remove unused ents
 -- TODO: How Unfortunate minigames
@@ -10,6 +9,8 @@
 
 
 AddCSLuaFile()
+
+local THIS = "npc_friendly_fakas"
 
 if Fakas == nil then
     Fakas = {}
@@ -138,13 +139,33 @@ function Fakas.Lib.Loot.give(ply, class, mode)
     end
 end
 
+local DECLOAKED = 0
+local CLOAKING = 1
+local CLOAKED = 2
+local DECLOAKING = 3
+
+local NONE = -1
+local INACTIVE = 0
+local ACTIVE = 1
+local CHASE = 2
+
+local CLOAK_STRING = "FakasFriendlyFakasCloak"
+local MUSIC_STRING = "FakasFriendlyFakasMusic"
+local KILL_STRING = "FakasFriendlyFakasKill"
+local TRAILS = {}
+
+local ORANGE = Color(255, 106, 0, 255)
+local WHITE = Color(255, 255, 255, 255)
+
 
 ENT.Base = "npc_friendly_png"
 DEFINE_BASECLASS(ENT.Base)
 
 ENT.name = "fakas"
 ENT.pretty_name = "Fakas"
+ENT.admin_only = true
 ENT.size = { Vector(-13, -13, 0), Vector(13, 13, 70) }
+ENT.colour = ORANGE
 ENT.textures = {
     "agent",
     "anti",
@@ -164,23 +185,7 @@ ENT.textures = {
     "nappa",
 }
 
-local DECLOAKED = 0
-local CLOAKING = 1
-local CLOAKED = 2
-local DECLOAKING = 3
 
-local NONE = -1
-local INACTIVE = 0
-local ACTIVE = 1
-local CHASE = 2
-
-local CLOAK_STRING = "FakasFriendlyFakasCloak"
-local MUSIC_STRING = "FakasFriendlyFakasMusic"
-local KILL_STRING = "FakasFriendlyFakasKill"
-local TRAILS = {}
-
-local ORANGE = Color(255, 106, 0, 255)
-local WHITE = Color(255, 255, 255, 255)
 
 local function get_fakases()
     local fakases = {}
@@ -1116,10 +1121,17 @@ if CLIENT then
     net.Receive(KILL_STRING, kill_message)
 end
 
+list.Set(
+    "NPC",
+    THIS,
+    {
+        Name = ENT.pretty_name,
+        Class = THIS,
+        Category = "Friendly Group",
+        AdminOnly = ENT.admin_only
+    }
+)
 
-list.Set("NPC", "npc_friendly_fakas", {
-    Name = "Fakas",
-    Class = "npc_friendly_fakas",
-    Category = "Friendly Group",
-    AdminOnly = true
-})
+hook.Add("FakasFriendlyNPCsModifyPNGList", "FakasFriendlyNPCsAddFakasPNG", function(pngs)
+    table.insert(pngs, THIS)
+end)

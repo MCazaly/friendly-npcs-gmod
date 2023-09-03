@@ -18,6 +18,9 @@ DEFINE_BASECLASS(ENT.Base)
 ENT.PhysgunDisabled = false
 ENT.AutomaticFrameAdvance = false
 
+ENT.admin_only = false
+ENT.default_colour = Color(255, 255, 255, 255)
+
 function ENT:get_name()
     return "npc_friendly_" .. self.name
 end
@@ -517,19 +520,14 @@ function ENT:phases()
 end
 
 function ENT:Initialize()
+    self.alive = true
     -- Base defaults
-    if self.scale == nil then
-        self.scale = 1
-    end
-    if self.name == nil then
-        self.name = "common"
-    end
-    if self.pretty_name == nil then
-        self.pretty_name = "Friendly Base NPC"
-    end
-    if self.size == null then
-        self.size = { Vector(-13, -13, 0), Vector(13, 13, 70) }
-    end
+    self.scale = self.scale or 1
+    self.name = self.name or "common"
+    self.pretty_name = self.pretty_name or "Friendly Base NPC"
+    self.size = self.size or { Vector(-13, -13, 0), Vector(13, 13, 70) }
+    self.colour = self.colour or self.default_colour
+
     self:SetModelScale(self.scale)
     self:set_collision_bounds(self.size[1], self.size[2])
     self.resource_root = "fakas/friendly-npcs/" .. self.name
@@ -587,12 +585,11 @@ function ENT:Initialize()
     self.lunge_accel = 3
     self.lunge_decel = 0.5
     self.unstick_attempts = 0
-    self.current_target = nil
+    self.current_target = Entity(-1)
     self.preferred_target = nil
     self.last_target = nil
     self.move_path = nil
     self.current_phase = nil
-    self.alive = true
 
     self.sound = {
         attack = {
@@ -664,10 +661,3 @@ function ENT:set_collision_bounds(min, max)
     -- To be overridden for special cases, like PNGs!
     self:SetCollisionBounds(min, max)
 end
-
-list.Set("NPC", "npc_friendly_common", {
-    Name = "Friendly Common",
-    Class = "npc_friendly_common",
-    Category = "Friendly Group",
-    AdminOnly = true
-})

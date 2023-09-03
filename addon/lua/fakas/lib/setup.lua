@@ -18,3 +18,5 @@ function Fakas.Lib.Setup.add_mod(name, func)
         Fakas[name] = func()
     end
 end
+
+function Fakas.Lib.
