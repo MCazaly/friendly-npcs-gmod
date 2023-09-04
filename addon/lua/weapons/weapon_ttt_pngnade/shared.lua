@@ -5,12 +5,21 @@ if not TTT2 then
     return
 end
 
+local THIS = "weapon_ttt_pngnade"
 local BAD_CREATE = "Sorry, something went wrong trying to summon %s."
 local BAD_CREATE_REFUND = BAD_CREATE .. " You have been refunded %s credit%s."
+
+--local BUYABLE_STRING = "FakasFriendlyTTT2PNGNadeBuyable"
 
 SWEP.Base = "weapon_tttbasegrenade"
 DEFINE_BASECLASS(SWEP.Base)
 
+SWEP.PrintName = "PNG Grenade"
+SWEP.Icon = "fakas/friendly-npcs/fakas/primary.png"
+SWEP.EquipMenuData = {
+    type = "Weapon",
+    desc = "PNG Grenade!\nSummons a random PNG on detonation.\n\nBe careful! Loyalty is a foreign concept to most PNGs."
+}
 SWEP.Kind = WEAPON_EQUIP2
 SWEP.WeaponID = AMMO_MOLOTOV
 SWEP.HoldType = "grenade"
@@ -29,19 +38,29 @@ SWEP.Weight = 5
 SWEP.AutoSpawnable = false
 SWEP.CanBuy = nil
 SWEP.notBuyable = true
-if SERVER and navmesh.GetNavAreaCount() > 0 then  -- TODO Manage Faklib better.
-    -- NPCs don't work well (or often at all!) without a navmesh.
-    SWEP.CanBuy = {ROLE_TRAITOR}
-    SWEP.notBuyable = false
-end
-if CLIENT then
-    SWEP.PrintName = "PNG Grenade"
-    SWEP.Icon = "fakas/friendly-npcs/fakas/primary.png"
-    SWEP.EquipMenuData = {
-        type = "Weapon",
-        desc = "PNG Grenade!\nSummons a random PNG on detonation.\n\nBe careful! Loyalty is a foreign concept to most PNGs."
-    }
+if SERVER then
+    hook.Add("PostInitEntity", "FakasFriendlyPNGNadeReload", function()   -- TODO Could this just be "TTT2FinishedLoading", "PostInitialize", or even "TTT2Initialize"
+        -- We need clients to know whether or not they can buy the nade, depending on Navmesh availability.
+        local class = WEPS.GetClass(THIS)
+        if navmesh.GetNavAreaCount() > 0 then  -- TODO Manage Faklib better.
+            -- NPCs don't work well (or often at all!) without a navmesh.
+            class.CanBuy = {ROLE_TRAITOR}
+            class.notBuyable = false
+        else
+            class.CanBuy = nil
+            class.notBuyable = true
+        end
+
+        CHANGED_EQUIPMENT[#CHANGED_EQUIPMENT + 1] = {THIS, class}
+        hook.Run()  -- TODO Figure out if I need to run something here.
+    end)
+else
+
     -- TODO Do I need to override DrawViewModel and ViewModelDrawn?
+
+    --net.Receive(BUYABLE_STRING, function()
+    --
+    --end)
 end
 
 function SWEP:Initialize()
