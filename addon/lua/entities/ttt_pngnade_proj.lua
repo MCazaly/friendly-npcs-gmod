@@ -20,12 +20,35 @@ AccessorFunc(ENT, "radius", "Radius", FORCE_NUMBER)
 AccessorFunc(ENT, "dmg", "Dmg", FORCE_NUMBER)
 
 function ENT:Initialize()
-    self.summon = self.summon or Entity(-1)
-    self.price = self.price or -1
-    self.spawned = false
-
-    return self.BaseClass.Initialize(self)
+    self.BaseClass.Initialize(self)
+    if SERVER then
+        self.summon = self.summon
+        self.price = self.price or -1
+        self.spawned = false
+    else
+        self.start = CurTime()
+        self.submaterial = nil
+    end
 end
+
+function ENT:SetupDataTables()
+    if BaseClass.SetupDataTables then
+        BaseClass.SetupDataTables(self)
+    end
+    self:NetworkVar("String", 1, "SummonTexture")
+end
+
+
+function ENT:Think()
+    if SERVER and self.summon ~= nil and self.summon.GetTexture ~= nil and #self:GetSummonTexture() == 0 then
+        self:SetSummonTexture(self.summon:GetTexture())
+    end
+    if CLIENT and self.submaterial == nil then
+        self:update_submaterial()
+    end
+    BaseClass.Think(self)
+end
+
 
 function ENT:Explode(tr)
     -- Detonate the grenade
@@ -72,25 +95,31 @@ function ENT:Explode(tr)
 end
 
 function ENT:OnRemove()
-    if not self.spawned and IsValid(self.summon) then
-        self.summon:Remove()
+    if not SERVER then
+        return
+    end
+    local summon = self.summon
+    if not self.spawned and IsValid(summon) then
+        summon:Remove()
     end
 end
 
 function ENT:spawn_summon()
-    if not IsValid(self.summon) then
+    local summon = self.summon
+    if not IsValid(summon) then
         return self:on_bad_summon()
     end
     local pos = self:GetPos()
-    self.summon:SetPos(pos)
-    self.summon:Spawn()
-    self.summon:Activate()
+    summon:SetPos(pos)
+    summon:Spawn()
+    summon:Activate()
+    summon.ready = true
     self.spawned = true
 
-    if self.summon.current_target then
+    if summon.current_target then
         local nearest = nil
         local min_distance = math.huge
-        local max_distance = self.summon.max_distance or 3500
+        local max_distance = summon.max_distance or 3500
         for _, ply in pairs(player.GetAll()) do
             if IsValid(ply) and ply:Alive() and not Fakas.Lib.is_spectator(ply) then
                 local distance = pos:Distance(ply:GetPos())
@@ -101,11 +130,11 @@ function ENT:spawn_summon()
             end
         end
         if nearest then
-            self.summon.current_target = nearest
+            summon.current_target = nearest
         end
     end
-    if self.summon.start_chase then
-        self.summon:start_chase()
+    if summon.start_chase then
+        summon:start_chase()
     end
 end
 
@@ -125,4 +154,18 @@ function ENT:on_bad_summon()
     else
         owner:ChatPrint(string.format(BAD_CREATE, self.summon_class))
     end
+end
+
+function ENT:set_submaterial(texture)
+    self.submaterial = Fakas.Lib.Graphics.png_material(texture)
+end
+
+function ENT:update_submaterial()
+    local texture = self:GetSummonTexture()
+    if texture ~= nil and #texture ~= 0 then
+        self:set_submaterial(texture)
+        print(string.format("%s: %q", self.ClassName, self.submaterial))
+        return true
+    end
+    return false
 end

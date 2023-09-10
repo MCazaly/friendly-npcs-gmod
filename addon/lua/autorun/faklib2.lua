@@ -114,3 +114,12 @@ end
 function Fakas.Lib.is_spectator(ply)
     return IsValid(ply) and ply:IsPlayer() and ply:GetObserverMode() ~= OBS_MODE_NONE
 end
+
+function Fakas.Lib.round(value)
+    return math.floor(value + 0.5)
+end
+
+Fakas.Lib.Graphics = {}
+function Fakas.Lib.Graphics.png_material(texture)
+    return Material(texture, "smooth mips")
+end

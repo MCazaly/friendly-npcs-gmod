@@ -1,3 +1,4 @@
+
 AddCSLuaFile()
 
 local function navmesh_error(ent)
@@ -78,6 +79,16 @@ function ENT:targetable_player(ent)
         not Fakas.Lib.is_spectator(ent) and
         ent:Alive() and
         ent:Health() > 0
+end
+
+function ENT:targetable_players(plys)
+    local targets = {}
+    for _, ply in ipairs(plys) do
+        if IsValid(ply) and self:targetable_player(ply) then
+            table.insert(targets, ply)
+        end
+    end
+    return targets
 end
 
 function ENT:targetable_npc(ent)
@@ -292,11 +303,10 @@ end
 
 function ENT:path(destination)
     local start = SysTime()
-    if start - self.failed_pathing < 5 or destination == null then
+    if start - self.failed_pathing < self.path_cooldown or destination == null then
         -- Pathing went wrong, wait a bit before we attempt this again
         return false
     end
-
 
     if not self.move_path:Compute(self, destination) then
         -- No valid path to our target :(
@@ -321,7 +331,7 @@ function ENT:classic_distance(target)
 end
 
 function ENT:should_stop()
-    return GetConVar("ai_disabled"):GetBool() or not self.alive
+    return GetConVar("ai_disabled"):GetBool() or not self.alive or not self.ready
 end
 
 function ENT:BehaveStart()
@@ -471,11 +481,9 @@ function ENT:chase_target(target)
         self:jump_at_target(self.current_target)
     end
 
-    if self:path(self:target_pos(target)) then
-        self:move()
-        return true
-    end
-    return false
+    local success = self:path(self:target_pos(target))
+    pcall(self.move, self)
+    return success
 end
 
 function ENT:chase()
@@ -520,6 +528,10 @@ function ENT:phases()
 end
 
 function ENT:Initialize()
+    if self.initialized then
+        return
+    end
+    self.secret = false
     self.alive = true
     -- Base defaults
     self.scale = self.scale or 1
@@ -530,6 +542,7 @@ function ENT:Initialize()
 
     self:SetModelScale(self.scale)
     self:set_collision_bounds(self.size[1], self.size[2])
+
     self.resource_root = "fakas/friendly-npcs/" .. self.name
 
     if self.defaults == nil then
@@ -572,6 +585,7 @@ function ENT:Initialize()
 
     self.failed_pathing = 0
     self.failed_paths = 0
+    self.path_cooldown = 1
     self.last_seek = 0
     self.last_path = 0
     self.last_attack = 0
@@ -647,14 +661,27 @@ function ENT:Initialize()
     hook.Add("PlayerSpawnedNPC", self:get_name() .. "_missing_navmesh", function()
         navmesh_error(self)
     end)
+
+    self.initialized = true
+    self.ready = true
+end
+
+function ENT:SetupDataTables()
+    return true
 end
 
 function ENT:OnReloaded()
+    self.initialized = false
+    self.ready = false
     self:Initialize()
 end
 
 function ENT:OnRemove()
     -- Placeholder
+end
+
+function ENT:Nick()
+    return self.pretty_name
 end
 
 function ENT:set_collision_bounds(min, max)

@@ -1,8 +1,8 @@
--- TODO: Grenade isn't appearing in shops even on maps with a Navmesh. Can I refresh the shop? Can I update the
 -- TODO: Test the grenade more
--- TODO: Only make the grenade available if the map has a navmesh
+-- TODO: Grenade model with dynamic texture
 -- TODO: Boss-only health bar.
 -- TODO: Generic chat message framework, use pretty name and colour attributes
+-- TODO: Hitbox issues again?
 -- TODO: reunite FakLib
 -- TODO: How Unfortunate remove unused ents
 -- TODO: How Unfortunate minigames
@@ -153,21 +153,14 @@ local CHASE = 2
 local CLOAK_STRING = "FakasFriendlyFakasCloak"
 local MUSIC_STRING = "FakasFriendlyFakasMusic"
 local KILL_STRING = "FakasFriendlyFakasKill"
+local DETECTOR_HOOK = "FakasFriendlyFakasCanDetect"
+local DETECTOR_EQUIP_HOOK = "FakasFriendlyTTT2ModifyDetectorEquipment"
 local TRAILS = {}
 
 local ORANGE = Color(255, 106, 0, 255)
 local WHITE = Color(255, 255, 255, 255)
 
-
-ENT.Base = "npc_friendly_png"
-DEFINE_BASECLASS(ENT.Base)
-
-ENT.name = "fakas"
-ENT.pretty_name = "Fakas"
-ENT.admin_only = true
-ENT.size = { Vector(-13, -13, 0), Vector(13, 13, 70) }
-ENT.colour = ORANGE
-ENT.textures = {
+local SKINS = {
     "agent",
     "anti",
     "borg",
@@ -183,20 +176,35 @@ ENT.textures = {
     "red",
     "spy",
     "sans",
-    "nappa",
+    "nappa"
 }
+local USED_PRIMARY_SKIN = false
 
+
+ENT.Base = "npc_friendly_png"
+DEFINE_BASECLASS(ENT.Base)
+
+ENT.name = "fakas"
+ENT.pretty_name = "Fakas"
+ENT.admin_only = true
+ENT.size = { Vector(-13, -13, 0), Vector(13, 13, 70) }
+ENT.colour = ORANGE
+ENT.scale = 1
 
 
 local function get_fakases()
     local fakases = {}
     for _, fakas in pairs(ents.FindByClass("npc_friendly_fakas")) do
-        if IsValid(fakas) and fakas.alive then
+        if IsValid(fakas) and fakas.ready and fakas.alive then
             table.insert(fakases, fakas)
         end
     end
 
     return fakases
+end
+
+local function is_detector(ply)
+    return IsValid(ply) and (hook.Run(DETECTOR_HOOK, ply) or false)
 end
 
 local function kill_message(killer)
@@ -345,15 +353,7 @@ if TTT2 then
                 end
             end
         end)
-
-        local function fakas_ttt_win()
-            if #get_fakases() > 0 then
-                -- Want to win? You have to kill Fakas first.
-                return WIN_NONE
-            end
-        end
     end
-
 
     hook.Add("TTT2RolesLoaded", "FriendlyNPCsFakasTTT2Setup", function()
         roles.InitCustomTeam(
@@ -371,16 +371,19 @@ if TTT2 then
         end)
     end)
 
-    hook.Add("TTT2CanUsePointer", "FriendlyNPCsFakasTTT2AllowPointer", function(ply, mode, _, ent)
+    hook.Add("TTT2CanUsePointer", "FriendlyNPCsFakasTTT2AllowPointer", function(ply, _, _, ent)
         if not IsValid(ply) or not IsValid(ent) or ent:GetClass() ~= "npc_friendly_fakas" then
-            return
+            return nil
         end
-
-        return ent.cloak_status == DECLOAKED or mode == PMODE_SPEC
+        return ent.cloak_status == DECLOAKED or is_detector(ply)
     end)
 end
 
 function ENT:Initialize()
+    if self.initialized then
+        return
+    end
+
     self.defaults = {
         seek_range = 10000,
         seek_refresh = 1,
@@ -394,7 +397,9 @@ function ENT:Initialize()
 
     BaseClass.Initialize(self)
 
-    self:SetCollisionGroup(COLLISION_GROUP_PASSABLE_DOOR)  -- We don't want players to get stuck on us
+    if SERVER then  -- We need this to be synchronised or people will see different textures!
+        self:SetTexture(self:pick_texture(SKINS))
+    end
 
     self.knockback_up = 3
     self.default_knockback_up = 2.5
@@ -429,24 +434,34 @@ function ENT:Initialize()
     self.airshots = 0
     self.max_distance = 3500
     self.teleport_gap = 150
-    self.material = self:create_material()
+
     self.sounds = {
         fadein = self.resource_root .. "/fadein.wav",
         fadeout = self.resource_root .. "/fadeout.wav",
         detected = self.resource_root .. "/detected.wav"
     }
+
+    self:SetCollisionGroup(COLLISION_GROUP_PUSHAWAY) -- TODO
 end
 
-function ENT:create_material()
-    local override = nil
+function ENT:pick_texture(options, _)
+    local texture = nil
     local month = os.date("*t").month
     if month == 12 then
-        override = "christmas"
+        texture = "christmas"
     elseif month == 10 then
-        override = "pumpkin"
+        texture = "pumpkin"
+    elseif #options == 0 or (not USED_PRIMARY_SKIN and math.random(0,1) == 0) then
+        texture = "primary"
+        USED_PRIMARY_SKIN = true
+    else
+        texture = Fakas.Lib.random_remove(options)
     end
 
-    return BaseClass.create_material(self, override)
+    if not texture then
+        error(string.format("Failed to pick a texture for %q!", self))
+    end
+    return self:texture(texture)
 end
 
 
@@ -558,7 +573,7 @@ function ENT:cloak_server()
     net.Broadcast()
 end
 
-function ENT:BehaveUpdate()
+function ENT:update_haste()
     self.haste = math.min(self.haste, 1)
     local haste_conditions = {
         -- Speedrun prop murder
@@ -568,7 +583,9 @@ function ENT:BehaveUpdate()
         -- We get impatient while waiting for our preferred target
         {self.should_target(self.preferred_target), 2},
         -- Not much time left!
-        {TTT2 and GetGlobalFloat("ttt_round_end") - CurTime() <= 60, 2}
+        {TTT2 and GetGlobalFloat("ttt_round_end") - CurTime() <= 60, 2.5},
+        -- One player left, we're not fucking around.
+        {TTT2 and #self:targetable_players(player.GetAll()) == 1, 2}
     }
 
     for _, condition in pairs(haste_conditions) do
@@ -576,9 +593,12 @@ function ENT:BehaveUpdate()
             self.haste = math.max(self.haste, condition[2])
         end
     end
+end
 
+function ENT:BehaveUpdate()
+    self:update_haste()
     BaseClass.BehaveUpdate(self)
-    end
+end
 
 --function ENT:target_pos(target)
 --    if not IsValid(target) or not target:IsInWorld() then
@@ -618,7 +638,7 @@ end
 
 function ENT:set_alpha(alpha)
     local min = 0
-    if CLIENT and Fakas.Lib.is_spectator(LocalPlayer()) then
+    if CLIENT and is_detector(LocalPlayer()) then
         min = 0.25
     end
     self.material:SetFloat("$alpha", math.max(alpha, min))
@@ -836,7 +856,6 @@ end
 
 function ENT:attack_prop(ent)
     -- Use explosions for prop attacks too
-    print("Attack prop!")
     BaseClass.attack_target(self, ent)
     return self:attack_target(ent)
 end
@@ -918,9 +937,9 @@ function ENT:phase_4()
     end
 
     local now = CurTime()
-    local chase_done = now - self.chase_start >= self.chase_time  -- We've chased too long
     local too_far = self:target_distance() > self.max_distance  -- Our target is too far away
-    local lost = too_far or self.failed_paths >= 2  -- We can't reach our target
+    local lost = too_far or self.failed_paths * self.path_cooldown >= 15  -- We can't reach our target
+    local chase_done = not lost and now - self.chase_start >= self.chase_time  -- We've chased too long
 
     if chase_done then
         self.preferred_target = nil  -- Okay, you get away this time.
@@ -1036,7 +1055,7 @@ end
 if CLIENT then
     local music = {}
     local music_ready = false
-    local last_obs_mode = nil
+    local last_detector = nil
 
     local function update_cloaks()
         for _, fakas in pairs(get_fakases()) do
@@ -1083,15 +1102,15 @@ if CLIENT then
     -- Make sure clients know how visible Fakas should be.
     hook.Add("InitPostEntity", "FakasFriendlyFakasPlayerSpawn", update_cloaks)
 
-    timer.Create("FakasFriendlyFakasSpectatorTimer", 1, 0, function()
+    timer.Create("FakasFriendlyFakasDetectorTimer", 1, 0, function()
         local ply = LocalPlayer()
         if not IsValid(ply) then
             return
         end
-        local obs_mode = ply:GetObserverMode()
-        if obs_mode ~= last_obs_mode then
+        local detector = is_detector(ply)
+        if detector ~= last_detector then
             -- Just in case.
-            last_obs_mode = obs_mode
+            last_detector = detector
             update_cloaks()
         end
 
@@ -1118,7 +1137,7 @@ if CLIENT then
         end
         play_track(music[mode])
     end)
-    
+
     net.Receive(KILL_STRING, kill_message)
 end
 
@@ -1136,3 +1155,164 @@ list.Set(
 hook.Add("FakasFriendlyNPCsModifyPNGList", "FakasFriendlyNPCsAddFakasPNG", function(pngs)
     table.insert(pngs, THIS)
 end)
+
+hook.Add(DETECTOR_HOOK, "FakasFriendlyFakasBaseDetectors", function(ply)
+    if Fakas.Lib.is_spectator(ply) then
+        return true
+    end
+    return nil
+end)
+hook.Add(DETECTOR_HOOK, "FakasFriendlyFakasTTT2Detectors", function(ply)
+    if not TTT2 then
+        return nil
+    end
+    if ply:GetSubRoleData().isPolicingRole then  -- Detectives, etc. and Defectives can see through cloak.
+        return true
+    end
+
+    local equipment = {
+        items = {
+            "item_ttt_radar",
+            "item_ttt_tracker"
+        },
+        weapons = {}
+    }
+    hook.Run(DETECTOR_EQUIP_HOOK, equipment)
+    for _, item in pairs(equipment.items) do
+        if ply:HasEquipmentItem(item) then
+            return true
+        end
+    end
+    for _, weapon in pairs(equipment.weapons) do
+        if ply:HasEquipmentWeapon(weapon) then
+            return true
+        end
+    end
+end)
+
+--local function draw_bar(width, height, radius, x, y, r, g, b)
+--    --surface.SetDrawColor(r, g, b, 255)
+--    draw.RoundedBox(radius, x, y, width, height, Color(r,g,b, 255))
+--    -- Reset the draw colour for anything else that needs it.
+--    --surface.SetDrawColor(255, 255, 255, 255)
+--end
+--
+--if CLIENT then
+--    local function get_bars(fraction)
+--        local bars = {}
+--        while #bars < fraction do
+--            local bar = {}
+--            bar.fraction = math.min(fraction - #bars, 1)
+--            if #bars == 0 then
+--                -- Primary bar
+--                if fraction <= 0.25 then
+--                    -- Low health - red
+--                    bar.r, bar.g, bar.b = 255, 0, 0
+--                elseif fraction <= 0.5 then
+--                    -- Medium health - yellow
+--                    bar.r, bar.g, bar.b = 255, 255, 0
+--                else
+--                    -- High health - green
+--                    bar.r, bar.g, bar.b = 0, 255, 0
+--                end
+--            elseif #bars % 2 == 1 then
+--                -- Secondary bar - cyan
+--                bar.r, bar.g, bar.b = 0, 255, 255
+--            else
+--                -- Tertiary bar - blue
+--                bar.r, bar.g, bar.b = 0, 0, 255
+--            end
+--            table.insert(bars, bar)
+--        end
+--
+--        return bars
+--    end
+--
+--    local BARS = {}
+--    local subjects = {}
+--
+--    local function setup_bars()
+--        BARS.width = math.ceil(ScrW() * 0.75)
+--        BARS.height = math.max(math.ceil(BARS.width * 0.01), 12)
+--        BARS.x = (ScrW() / 2) - math.ceil(BARS.width / 2)
+--        BARS.y = math.ceil(BARS.height * 4.5)
+--        BARS.radius = math.floor(BARS.height) * 2
+--        BARS.text_x = ScrW() / 2
+--
+--        surface.CreateFont(
+--            "FakasFriendlyHealthBars",
+--            {
+--                font = "Roboto",
+--                extended = false,
+--                size = math.ceil(BARS.height),
+--                weight = 1000,
+--                blursize = 0,
+--                scanlines = 0,
+--                antialias = true,
+--                italic = false,
+--                strikeout = false,
+--                symbol = false,
+--                rotary = false,
+--                shadow = true,
+--                additive = false,
+--                outline = false
+--            }
+--        )
+--    end
+--
+--    hook.Add("OnScreenSizeChanged", "FakasFriendlyBarsSetup", setup_bars)
+--
+--    hook.Add("HUDPaint", "FakasFriendlyHealthBars", function()
+--
+--        hook.Run("FakasFriendlyBarsModifySubjectsList", subjects)
+--
+--        if #subjects == 0 then
+--            return
+--        end
+--
+--        local count = 1
+--        for _, subject in pairs(subjects) do
+--            local name = subject.name
+--
+--            if not name then
+--                print("Bars subject has missing data!")
+--                continue
+--            end
+--
+--            local y = BARS.y + BARS.height * 3 * count
+--            local bars = get_bars(subject.fraction)
+--            if #bars > 1 then
+--                -- Only draw up to two of the last bars
+--                bars = {bars[#bars -1], bars[#bars]}
+--            end
+--            for _, bar in pairs(bars) do
+--                draw_bar(
+--                    BARS.width * bar.fraction,
+--                    BARS.height,
+--                    BARS.radius,
+--                    BARS.x,
+--                    y,
+--                    bar.r,
+--                    bar.g,
+--                    bar.b
+--                )
+--            end
+--
+--            draw.SimpleTextOutlined(
+--                name,
+--                "FakasFriendlyHealthBars",
+--                BARS.text_x,
+--                y - math.ceil(BARS.height * 1.5),
+--                ent.colour,
+--                TEXT_ALIGN_CENTER,
+--                TEXT_ALIGN_TOP,
+--                1,
+--                color_black
+--            )
+--
+--            count = count + 1
+--        end
+--    end)
+--
+--    setup_bars()
+--end

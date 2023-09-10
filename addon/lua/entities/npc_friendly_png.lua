@@ -5,17 +5,18 @@ AddCSLuaFile()
 ENT.Base = "npc_friendly_common"
 DEFINE_BASECLASS(ENT.Base)
 ENT.AutomaticFrameAdvance = false
-ENT.scale = 5
+ENT.scale = 1
 ENT.textures = {}
 
 function ENT:Initialize()
+    if self.initialized then
+        return
+    end
+
     BaseClass.Initialize(self)
 
-    if self.name == "common" then
-        self.material = Material("error")
-    else
-        self.material = self:create_material()
-    end
+    self.material = self:create_material(self:GetTexture())
+
     self.render_mode = RENDERMODE_TRANSCOLOR
     self:SetRenderMode(self.render_mode)
     self.RenderGroup = RENDERGROUP_TRANSLUCENT
@@ -24,20 +25,17 @@ function ENT:Initialize()
     self:SetColor(Color(255, 255, 255, 1))
 end
 
-function ENT:create_material(override)
-    local texture = "primary"
-
-    if override ~= nil then
-        texture = override
-    elseif math.random(0,1) == 1 then
-        texture = self:random_texture()
-    end
-
-    return Material(self:texture(texture), "smooth mips")
+function ENT:SetupDataTables()
+    BaseClass.SetupDataTables(self)
+    self:NetworkVar("String", 0, "Texture")
 end
 
-function ENT:random_texture()
-    return Fakas.Lib.random_member(self.textures)
+function ENT:pick_texture(_, _)
+    error(string.format("pick_texture not overriden for %q!"), self)
+end
+
+function ENT:create_material(texture)
+    return Fakas.Lib.Graphics.png_material(texture)
 end
 
 function ENT:texture(name)
