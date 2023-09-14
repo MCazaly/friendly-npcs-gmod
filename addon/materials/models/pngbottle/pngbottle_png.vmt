@@ -1,0 +1,7 @@
+"VertexLitGeneric"
+{
+	"$basetexture" "models/pngbottle/pngbottle_png"
+	$nocull 1
+	$alphatest 1
+	$alphatestreference 1
+}

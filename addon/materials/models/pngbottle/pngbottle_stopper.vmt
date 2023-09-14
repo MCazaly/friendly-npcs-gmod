@@ -1,0 +1,5 @@
+"VertexlitGeneric"
+{
+	"$basetexture" "models/pngbottle/pngbottle_stopper"
+	"$nolod" 1
+}

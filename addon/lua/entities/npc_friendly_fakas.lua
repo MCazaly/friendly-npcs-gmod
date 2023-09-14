@@ -3,6 +3,7 @@
 -- TODO: Boss-only health bar.
 -- TODO: Generic chat message framework, use pretty name and colour attributes
 -- TODO: Hitbox issues again?
+-- TODO: Fix model/texture paths for the bottle.
 -- TODO: reunite FakLib
 -- TODO: How Unfortunate remove unused ents
 -- TODO: How Unfortunate minigames
@@ -401,7 +402,7 @@ function ENT:Initialize()
         self:SetTexture(self:pick_texture(SKINS))
     end
 
-    self.knockback_up = 3
+    self.knockback_up = 2.5
     self.default_knockback_up = 2.5
     self.attack_force = 250
     self.default_attack_force = 250
@@ -881,31 +882,34 @@ function ENT:phase_1()
 end
 
 function ENT:phase_2()
-    -- We've teleported away, wait until we're fully healed and the minimum time has elapsed
+    -- We've teleported away, wait until we're fully healed and the minimum time has elapsed.
     if self.cloak_status ~= CLOAKED then
         self:cloak()
         return
     end
-
     local detector = self:detected()
     if IsValid(detector) then
+        -- Someone's found us! Time to hurt them.
         return self:reveal(detector)
     end
-
     local now = CurTime()
-    if now - self.downtime_last >= 1 then
-        -- Heal until we've reached max health
-        self:SetHealth(math.min(self:Health() + self.heal_rate, self:GetMaxHealth()))
+    if now - self.downtime_last < 1 then
+        -- Scheduled downtime activities can only happen once per second.
+        return
     end
 
+    -- Heal up to our max health.
+    self:SetHealth(math.min(self:Health() + self.heal_rate, self:GetMaxHealth()))
+
     if now >= self.downtime_end then
-        -- We're all healed up and we've waited the minimum duration, time to do some crimes
+        -- Time's up! time to do some crimes.
         local pos = self:update_target()
         if pos ~= nil then
             self:teleport(pos)
             self:end_downtime()
         end
     end
+    self.downtime_last = now
 end
 
 function ENT:phase_3()
@@ -1190,129 +1194,168 @@ hook.Add(DETECTOR_HOOK, "FakasFriendlyFakasTTT2Detectors", function(ply)
     end
 end)
 
---local function draw_bar(width, height, radius, x, y, r, g, b)
---    --surface.SetDrawColor(r, g, b, 255)
---    draw.RoundedBox(radius, x, y, width, height, Color(r,g,b, 255))
---    -- Reset the draw colour for anything else that needs it.
---    --surface.SetDrawColor(255, 255, 255, 255)
---end
---
---if CLIENT then
---    local function get_bars(fraction)
---        local bars = {}
---        while #bars < fraction do
---            local bar = {}
---            bar.fraction = math.min(fraction - #bars, 1)
---            if #bars == 0 then
---                -- Primary bar
---                if fraction <= 0.25 then
---                    -- Low health - red
---                    bar.r, bar.g, bar.b = 255, 0, 0
---                elseif fraction <= 0.5 then
---                    -- Medium health - yellow
---                    bar.r, bar.g, bar.b = 255, 255, 0
---                else
---                    -- High health - green
---                    bar.r, bar.g, bar.b = 0, 255, 0
---                end
---            elseif #bars % 2 == 1 then
---                -- Secondary bar - cyan
---                bar.r, bar.g, bar.b = 0, 255, 255
---            else
---                -- Tertiary bar - blue
---                bar.r, bar.g, bar.b = 0, 0, 255
---            end
---            table.insert(bars, bar)
---        end
---
---        return bars
---    end
---
---    local BARS = {}
---    local subjects = {}
---
---    local function setup_bars()
---        BARS.width = math.ceil(ScrW() * 0.75)
---        BARS.height = math.max(math.ceil(BARS.width * 0.01), 12)
---        BARS.x = (ScrW() / 2) - math.ceil(BARS.width / 2)
---        BARS.y = math.ceil(BARS.height * 4.5)
---        BARS.radius = math.floor(BARS.height) * 2
---        BARS.text_x = ScrW() / 2
---
---        surface.CreateFont(
---            "FakasFriendlyHealthBars",
---            {
---                font = "Roboto",
---                extended = false,
---                size = math.ceil(BARS.height),
---                weight = 1000,
---                blursize = 0,
---                scanlines = 0,
---                antialias = true,
---                italic = false,
---                strikeout = false,
---                symbol = false,
---                rotary = false,
---                shadow = true,
---                additive = false,
---                outline = false
---            }
---        )
---    end
---
---    hook.Add("OnScreenSizeChanged", "FakasFriendlyBarsSetup", setup_bars)
---
---    hook.Add("HUDPaint", "FakasFriendlyHealthBars", function()
---
---        hook.Run("FakasFriendlyBarsModifySubjectsList", subjects)
---
---        if #subjects == 0 then
---            return
---        end
---
---        local count = 1
---        for _, subject in pairs(subjects) do
---            local name = subject.name
---
---            if not name then
---                print("Bars subject has missing data!")
---                continue
---            end
---
---            local y = BARS.y + BARS.height * 3 * count
---            local bars = get_bars(subject.fraction)
---            if #bars > 1 then
---                -- Only draw up to two of the last bars
---                bars = {bars[#bars -1], bars[#bars]}
---            end
---            for _, bar in pairs(bars) do
---                draw_bar(
---                    BARS.width * bar.fraction,
---                    BARS.height,
---                    BARS.radius,
---                    BARS.x,
---                    y,
---                    bar.r,
---                    bar.g,
---                    bar.b
---                )
---            end
---
---            draw.SimpleTextOutlined(
---                name,
---                "FakasFriendlyHealthBars",
---                BARS.text_x,
---                y - math.ceil(BARS.height * 1.5),
---                ent.colour,
---                TEXT_ALIGN_CENTER,
---                TEXT_ALIGN_TOP,
---                1,
---                color_black
---            )
---
---            count = count + 1
---        end
---    end)
---
---    setup_bars()
---end
+local BARS = {
+    VERTICAL = 0,
+    HORIZONTAL = 1
+}
+
+local BOSS = {
+
+}
+
+if CLIENT then
+    hook.Add("FakasFriendlyBarsModifySubjectsList", "PlayerBossBars", function(subjects)
+        for _, ply in pairs(player.GetAll()) do
+            if IsValid(ply) then
+                table.insert(subjects, ply)
+            end
+        end
+    end)
+    hook.Add("FakasFriendlyBarsModifySubjectsList", "FakasBossBars", function(subjects)
+        for _, fakas in pairs(get_fakases()) do
+            table.insert(subjects, fakas)
+        end
+    end)
+
+    local function _draw_bar(bar)
+        local width, height = bar.width, bar.length
+        if bar.orientation == BARS.HORIZONTAL then
+            width, height = bar.length, bar.width
+        end
+            draw.RoundedBox(bar.radius, bar.x, bar.y, width, height, bar.colour)
+        end
+
+    local function Bar(length, width, orientation, r, g, b, x, y)
+        local bar = {
+            length=length,
+            width=width,
+            orientation=orientation,
+            colour = Color(r, g, b, 255),
+            x=x,
+            y=y,
+            radius=nil,
+        }
+        function bar:draw()
+            _draw_bar(self)
+        end
+        return bar
+    end
+
+    local function RoundedBar(length, width, orientation, r, g, b, x, y, radius)
+        local bar = Bar(length, width, orientation, r, g, b, x, y)
+        bar.radius = radius
+        return bar
+    end
+
+    local function setup_boss()
+        BOSS.width = math.ceil(ScrW() * 0.75)
+        BOSS.height = math.max(math.ceil(BOSS.width * 0.01), 12)
+        BOSS.x = (ScrW() / 2) - math.ceil(BOSS.width / 2)
+        BOSS.y = math.ceil(BOSS.height * 4.5)
+        BOSS.radius = math.floor(BOSS.height) * 2
+        BOSS.text_x = ScrW() / 2
+        BOSS.background = RoundedBar(BOSS.width, BOSS.height, BARS.HORIZONTAL, 10, 10, 10, BOSS.x, BOSS.y, BOSS.radius)
+
+        surface.CreateFont(
+            "FakasFriendlyBossBars",
+            {
+                font = "Roboto",
+                extended = false,
+                size = math.ceil(BOSS.height),
+                weight = 1000,
+                blursize = 0,
+                scanlines = 0,
+                antialias = true,
+                italic = false,
+                strikeout = false,
+                symbol = false,
+                rotary = false,
+                shadow = true,
+                additive = false,
+                outline = false
+            }
+        )
+    end
+
+    local function boss_bars(multiplier, y)
+        local bars = {}
+        while #bars < multiplier do
+            local length = math.min(multiplier - #bars, 1)
+            local r, g, b = nil
+            if #bars == 0 then
+                -- Primary bar
+                if length <= 0.25 then
+                    -- Low health - red
+                    r, g, b = 255, 0, 0
+                elseif length <= 0.5 then
+                    -- Medium health - yellow
+                    r, g, b = 255, 255, 0
+                else
+                    -- High health - green
+                    r, g, b = 0, 255, 0
+                end
+            elseif #bars % 2 == 1 then
+                -- Secondary bar - cyan
+                r, g, b = 0, 255, 255
+            else
+                -- Tertiary bar - blue
+                r, g, b = 0, 0, 255
+            end
+            table.insert(bars, RoundedBar(BOSS.width * length, BOSS.height, BARS.HORIZONTAL, r, g, b, BOSS.x, y, BOSS.radius))
+        end
+        return bars
+    end
+
+    hook.Add("OnScreenSizeChanged", "FakasFriendlyBarsSetup", setup_boss)
+
+    hook.Add("HUDPaint", "FakasFriendlyBossBars", function()
+        local subjects = {}
+        hook.Run("FakasFriendlyBarsModifySubjectsList", subjects)
+
+        if #subjects == 0 then
+            return
+        end
+
+        local count = 1
+        for _, subject in pairs(subjects) do
+            if not IsValid(subject) or not (subject.alive or (subject.Alive and subject:Alive())) then
+                continue
+            end
+            local name = subject.name
+            if subject.Nick then
+                name = subject:Nick()
+            end
+
+            if not name then
+                print("Bars subject has missing data!")
+                continue
+            end
+
+            local y = BOSS.y + BOSS.height * 3 * count
+            local bars = boss_bars(subject:Health() / subject:GetMaxHealth(), y)
+            if #bars == 1 then
+                -- Only draw one bar at a time, plus the background bar
+                BOSS.background.y = y
+                bars = {BOSS.background, bars[#bars]}
+            end
+            for _, bar in pairs(bars) do
+                bar:draw()
+            end
+
+            draw.SimpleTextOutlined(
+                name,
+                "FakasFriendlyBossBars",
+                BOSS.text_x,
+                y - BOSS.height * 1.25,
+                subject.colour,
+                TEXT_ALIGN_CENTER,
+                TEXT_ALIGN_TOP,
+                1,
+                color_black
+            )
+            count = count + 1
+        end
+    end)
+
+    setup_boss()
+end

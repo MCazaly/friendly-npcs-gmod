@@ -4,7 +4,6 @@ end
 if not TTT2 then
     return
 end
-
 local BAD_CREATE = "Sorry, something went wrong trying to summon %s."
 local BAD_CREATE_REFUND = BAD_CREATE .. " You have been refunded %s credit%s."
 
@@ -12,7 +11,7 @@ ENT.Base = "ttt_basegrenade_proj"
 DEFINE_BASECLASS(ENT.Base)
 
 ENT.Type = "anim"
-ENT.Model = Model("models/weapons/w_eq_flashbang_thrown.mdl")
+ENT.Model = Model("models/pngbottle/pngbottle.mdl")
 ENT.ExplosionDamage = 0
 ENT.ExplosionRadius = 0
 
